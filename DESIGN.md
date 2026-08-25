@@ -183,6 +183,15 @@ Consumed notes are moved to `extensions/ad_hoc/archive/` after a successful cons
   `password/secret/token/api_key`-style assignments.
 - Memory tools resolve paths inside the memory root only; traversal and absolute paths are
   rejected before any filesystem call.
+- The `/dsh-memory/rpc` endpoint guards itself because the DSH webServer performs no auth/CSRF
+  checks: requests with a non-loopback `Host` (DNS rebinding) or a non-loopback `Origin`
+  (cross-origin browser POSTs, including `Origin: null`) are refused with 403; requests without
+  an `Origin` (curl/local tooling) are allowed since such clients already hold machine access.
+- The vault cannot delete what forgetting only retires: `delete-file` hard-refuses the core
+  pipeline files (`MEMORY.md`, `memory_summary.md`, `raw_memories.md`, `raw_memories.archive.md`)
+  and everything under `rollout_summaries/.retired/`.
+- Usage telemetry records only reads of active rollout summaries (canonicalized path keys);
+  handbook/log/skill/retired reads never count as "used" and never enter the forgetting input.
 - The consolidation prompt demands the exact `v1` first line and the plugin enforces it
   mechanically (`ensureSummaryV1`).
 - Consolidation output is bounded by `phase2MaxTokens`; injected summaries by `maxSummaryChars`;

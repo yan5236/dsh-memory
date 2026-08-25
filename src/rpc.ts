@@ -11,6 +11,7 @@ import { messageOf } from './util.js'
 
 export interface HttpRequestLike {
   method?: string
+  headers?: Record<string, string | string[] | undefined>
   [Symbol.asyncIterator](): AsyncIterator<unknown>
 }
 
@@ -100,6 +101,71 @@ export interface StatePayload {
   }
 }
 
+/** Loopback hostnames the RPC accepts regardless of port. */
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]'])
+
+/**
+ * Same-origin guard for the RPC endpoint. The DSH webServer performs no
+ * auth/CSRF checks of its own (pure route dispatch), so this plugin must:
+ * - reject requests whose `Host` is not loopback → blocks DNS-rebinding;
+ * - reject browser requests whose `Origin` is not loopback → blocks
+ *   cross-origin POSTs from arbitrary pages (the JSON body is accepted
+ *   regardless of content-type, so a `text/plain` fetch would otherwise slip
+ *   through CORS preflight).
+ * Requests without an `Origin` (curl, local tooling) are allowed: such
+ * clients already hold full machine access, matching the localhost threat
+ * model. Returns a short human-readable reason, or null when allowed.
+ */
+export function originGuard(headers: Record<string, string | string[] | undefined> | undefined): string | null {
+  const take = (name: string): string | undefined => {
+    const value = headers?.[name]
+    const first = Array.isArray(value) ? value[0] : value
+    return typeof first === 'string' && first !== '' ? first : undefined
+  }
+  const host = take('host')
+  if (host === undefined) return 'missing Host header'
+  let hostname: string
+  try {
+    hostname = new URL(`http://${host}`).hostname
+  } catch {
+    return 'malformed Host header'
+  }
+  if (!LOOPBACK_HOSTS.has(hostname)) return 'non-loopback Host'
+  const origin = take('origin')
+  if (origin === undefined) return null
+  if (origin === 'null') return 'opaque Origin'
+  try {
+    const originHostname = new URL(origin).hostname
+    if (!LOOPBACK_HOSTS.has(originHostname)) return 'cross-origin request'
+  } catch {
+    return 'malformed Origin'
+  }
+  return null
+}
+
+/**
+ * Core memory files overwritten by every consolidation; deleting them would
+ * destroy the memory system.
+ */
+const CORE_FILES = new Set(['MEMORY.md', 'memory_summary.md', 'raw_memories.md', 'raw_memories.archive.md'])
+
+/** Retired summaries live under this prefix; the design promises recoverable, never deleted. */
+const RETIRED_PREFIX = 'rollout_summaries/.retired'
+
+/**
+ * Reason a `delete-file` call is refused, or null when deletion is allowed.
+ * Retro-archived summaries and core pipeline files are hard-refused; the
+ * vault cannot permanently delete what forgetting only ever "retires".
+ */
+export function protectedDeleteReason(path: string): string | null {
+  const normalized = path.replace(/\\/g, '/')
+  if (CORE_FILES.has(normalized)) return `delete-file refused: ${path} is a core memory file`
+  if (normalized === RETIRED_PREFIX || normalized.startsWith(`${RETIRED_PREFIX}/`)) {
+    return `delete-file refused: ${path} is a retired summary (recoverable archive)`
+  }
+  return null
+}
+
 async function listProviders(deps: RpcDeps): Promise<ProviderEntry[]> {
   try {
     const providers = deps.llm.listProviders?.() ?? []
@@ -167,7 +233,12 @@ async function statePayload(deps: RpcDeps): Promise<StatePayload> {
       lastPhase1At: snapshot.lastPhase1At,
       lastPhase2At: snapshot.lastPhase2At,
       ...(snapshot.phase2Error === undefined ? {} : { phase2Error: snapshot.phase2Error }),
-      cooldownRemainingMs: Math.max(0, snapshot.lastPhase2At + cfg.consolidationCooldownMs - now),
+      // "When can the next automatic run happen": after the full cooldown,
+      // or sooner when a failed run has scheduled a retry window.
+      cooldownRemainingMs: Math.max(0, Math.max(
+        snapshot.lastPhase2At + cfg.consolidationCooldownMs,
+        snapshot.nextAutoRetryAt ?? 0,
+      ) - now),
       runningPhase1: deps.phase1.isRunning,
       runningPhase2: deps.phase2.isRunning,
       phase2Failures: deps.state.phase2Failures,
@@ -182,6 +253,12 @@ export function registerRpc(webServer: WebServerRuntime, deps: RpcDeps): () => v
     path: '/dsh-memory/rpc',
     handler: async (req, res) => {
       try {
+        const denied = originGuard(req.headers)
+        if (denied !== null) {
+          res.writeHead(403, { 'content-type': 'application/json' })
+          res.end(JSON.stringify({ ok: false, message: `forbidden: ${denied}` }))
+          return
+        }
         if (req.method !== 'POST') {
           res.writeHead(405, { 'content-type': 'application/json' })
           res.end(JSON.stringify({ ok: false, message: 'method not allowed' }))
@@ -241,8 +318,13 @@ export function registerRpc(webServer: WebServerRuntime, deps: RpcDeps): () => v
           if (path === '' || path.endsWith('/') || path.endsWith('\\')) {
             result = { ok: false, message: 'delete-file requires a non-empty file path' }
           } else {
-            const removed = await deps.files.removeFile(path)
-            result = { ok: removed, path }
+            const denied = protectedDeleteReason(path)
+            if (denied !== null) {
+              result = { ok: false, message: denied }
+            } else {
+              const removed = await deps.files.removeFile(path)
+              result = { ok: removed, path }
+            }
           }
         } else if (method === 'list-providers') {
           result = { providers: await listProviders(deps) }

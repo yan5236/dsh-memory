@@ -18,6 +18,8 @@ export interface KvFacilityLike {
         hasGlobal: boolean;
     }): Promise<KvUnitLike>;
 }
+/** Automatic retry window after a failed consolidation (before the full cooldown). */
+export declare const PHASE2_RETRY_MS: number;
 /**
  * Owns the plugin's durable state: per-session extraction claims, Phase 2
  * cooldown, the pending-consolidation flag, and settings-page overrides.
@@ -55,12 +57,15 @@ export declare class MemoryStateStore {
     recordPhase1(at: number): void;
     recordPhase2(at: number, error?: string): void;
     /**
-     * Record a failed consolidation: schedules the retry window and bumps the
-     * consecutive-failure counter so automatic retries pause at the cap.
-     * Returns the new counter value.
+     * Record a failed consolidation: keeps `lastPhase2At` at the real attempt
+     * time, schedules the automatic retry window (`at + retryAfterMs`), and
+     * bumps the consecutive-failure counter so automatic retries pause at the
+     * cap. Returns the new counter value.
      */
-    recordPhase2Failure(at: number, error: string): number;
+    recordPhase2Failure(at: number, error: string, retryAfterMs?: number): number;
     get phase2Failures(): number;
+    /** Earliest epoch ms an automatic Phase 2 retry may run (0 = no window pending). */
+    get nextAutoRetryAt(): number;
     /** Reset the consecutive-failure counter (new extraction input arrives). */
     resetPhase2Failures(): void;
     /**

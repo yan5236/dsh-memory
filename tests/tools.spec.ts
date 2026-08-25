@@ -44,22 +44,55 @@ function execute(tool: ToolLike | undefined, args: Record<string, unknown>): Pro
 }
 
 describe('memory tools usage tracking', () => {
-  it('records usage for memory_read on successful reads only', async () => {
+  it('records usage for memory_read only on rollout summaries, not core files', async () => {
     const { files, state, tools } = await harness()
     await files.writeAtomic('MEMORY.md', '# memory handbook\n')
+    await files.writeAtomic('rollout_summaries/a.md', '回顾 A\n')
 
     const read = tools.get('memory_read')
+    // Core handbook reads never count as usage (P2-7: only the forgetting
+    // candidate set — rollout summaries — is tracked).
     await execute(read, { path: 'MEMORY.md' })
-    expect(state.usageOf('MEMORY.md')).toMatchObject({ count: 1 })
-    await execute(read, { path: 'MEMORY.md' })
-    expect(state.usageOf('MEMORY.md')).toMatchObject({ count: 2, lastAt: expect.any(Number) })
+    expect(state.usageOf('MEMORY.md')).toBeUndefined()
+    expect(state.usageCount).toBe(0)
+
+    await execute(read, { path: 'rollout_summaries/a.md' })
+    expect(state.usageOf('rollout_summaries/a.md')).toMatchObject({ count: 1 })
+    await execute(read, { path: 'rollout_summaries/a.md' })
+    expect(state.usageOf('rollout_summaries/a.md')).toMatchObject({ count: 2, lastAt: expect.any(Number) })
 
     // Missing file: no usage recorded.
     await execute(read, { path: 'rollout_summaries/nope.md' })
     expect(state.usageOf('rollout_summaries/nope.md')).toBeUndefined()
   })
 
-  it('records usage for files surfaced by memory_search, not for memory_list', async () => {
+  it('canonicalizes non-standard path spellings to the same usage key', async () => {
+    const { files, state, tools } = await harness()
+    await files.writeAtomic('rollout_summaries/a.md', '回顾 A 规范化\n')
+
+    const read = tools.get('memory_read')
+    await execute(read, { path: 'rollout_summaries/a.md' })
+    await execute(read, { path: 'rollout_summaries/./a.md' })
+    await execute(read, { path: './rollout_summaries/a.md' })
+    await execute(read, { path: 'rollout_summaries\\a.md' })
+    const record = state.usageOf('rollout_summaries/a.md')
+    expect(record).toMatchObject({ count: 4 })
+    // No stray keys appear.
+    expect(state.usageCount).toBe(1)
+  })
+
+  it('does not record usage for retired archives or dot-prefixed paths', async () => {
+    const { files, state, tools } = await harness()
+    await files.writeAtomic('rollout_summaries/.retired/old.md', '已退役回顾\n')
+    await files.writeAtomic('rollout_summaries/.hidden.md', '点开头文件\n')
+
+    const read = tools.get('memory_read')
+    await execute(read, { path: 'rollout_summaries/.retired/old.md' })
+    expect(state.usageOf('rollout_summaries/.retired/old.md')).toBeUndefined()
+    expect(state.usageCount).toBe(0)
+  })
+
+  it('records usage for files surfaced by memory_search only when they are rollout summaries', async () => {
     const { files, state, tools } = await harness()
     await files.writeAtomic('MEMORY.md', '# handbook\n\n- 中文偏好\n')
     await files.writeAtomic('rollout_summaries/a.md', '回顾 A 中文\n')
@@ -70,14 +103,15 @@ describe('memory tools usage tracking', () => {
     expect(String(result)).toContain('MEMORY.md')
     expect(String(result)).toContain('a.md')
     expect(String(result)).not.toContain('b.md')
-    expect(state.usageOf('MEMORY.md')).toMatchObject({ count: 1 })
+    // Handbook hits do not count as usage; the rollout summary does.
+    expect(state.usageOf('MEMORY.md')).toBeUndefined()
     expect(state.usageOf('rollout_summaries/a.md')).toMatchObject({ count: 1 })
     expect(state.usageOf('rollout_summaries/b.md')).toBeUndefined()
 
     // Browsing the tree is not usage.
     const list = tools.get('memory_list')
     await execute(list, {})
-    expect(state.usageCount).toBe(2)
+    expect(state.usageCount).toBe(1)
   })
 
   it('skips usage when a search finds nothing', async () => {

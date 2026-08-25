@@ -1,5 +1,6 @@
 /** Read-path tools: memory_list / memory_read / memory_search / memory_add. */
 
+import { posix } from 'node:path'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { MemoryStateStore } from './bookkeeping.js'
 import type { MemoryFiles } from './files.js'
@@ -12,6 +13,27 @@ export interface ToolRegistryRuntime {
 const MAX_READ_CHARS = 300_000
 const MAX_SEARCH_FILES = 80
 const MAX_SEARCH_FILE_BYTES = 2_000_000
+
+/**
+ * Canonical usage key for a user-supplied memory path: forward slashes,
+ * dot segments collapsed (`./`, `a//b`, `a/./b` → `a/b`). Reads that succeed
+ * against such variants must land on the same key as the canonical
+ * `rollout_summaries/<slug>.md` form, or forgetting would judge a recently
+ * read summary as unused.
+ */
+export function usageKey(input: string): string {
+  const normalized = posix.normalize(input.replace(/\\/g, '/'))
+  return normalized === '.' ? '' : normalized
+}
+
+/**
+ * Usage telemetry only makes sense for rollout summaries (the forgetting
+ * candidate set); reads of MEMORY.md, logs, skills, or retired archives must
+ * not count as "used" (and must not inflate the usage map).
+ */
+function isRolloutUsage(path: string): boolean {
+  return path.startsWith('rollout_summaries/') && !path.startsWith('rollout_summaries/.retired/')
+}
 
 function sizeLabel(bytes: number): string {
   if (bytes < 1_024) return `${bytes} B`
@@ -66,8 +88,11 @@ export function registerMemoryTools(
     async execute(args: { path: string }): Promise<string> {
       const content = await files.readIfExists(args.path, MAX_READ_CHARS)
       if (content === undefined) return `记忆库中不存在该文件：${args.path}（可用 memory_list 查看现有文件）`
-      // Read-path usage: a successful read counts as "this memory was used".
-      state.recordUsage(args.path, Date.now())
+      // Read-path usage: a successful read of a rollout summary counts as
+      // "this memory was used". The key is canonicalized so non-canonical
+      // spellings still match the forgetting query.
+      const key = usageKey(args.path)
+      if (isRolloutUsage(key)) state.recordUsage(key, Date.now())
       if (content.length >= MAX_READ_CHARS) {
         return `${content}\n…（文件过大已截断至 ${MAX_READ_CHARS} 字符）`
       }
@@ -108,7 +133,10 @@ export function registerMemoryTools(
         }
       }
       const now = Date.now()
-      for (const path of used) state.recordUsage(path, now)
+      for (const path of used) {
+        const key = usageKey(path)
+        if (isRolloutUsage(key)) state.recordUsage(key, now)
+      }
       if (hits.length === 0) return `在记忆库中未找到与 "${args.query}" 匹配的内容。`
       return hits.join('\n')
     },

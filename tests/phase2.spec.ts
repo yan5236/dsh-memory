@@ -193,20 +193,26 @@ describe('Phase2Runner', () => {
     const failed = await h.runner.run(false)
     expect(failed.kind).toBe('error')
     expect(h.state.pendingConsolidation).toBe(true)
-    // The failure schedules the next automatic attempt ~15 minutes out.
-    const retryIn = h.state.lastPhase2At + 6 * 60 * 60_000 - h.clock.value
+    // `lastPhase2At` keeps the real attempt time; the retry window lives in
+    // its own field, ~15 minutes out from the failure clock.
+    expect(h.state.lastPhase2At).toBe(h.clock.value)
+    const retryIn = h.state.nextAutoRetryAt - h.clock.value
+    expect(h.state.nextAutoRetryAt).toBeGreaterThan(0)
     expect(retryIn).toBeGreaterThan(14 * 60_000)
     expect(retryIn).toBeLessThanOrEqual(15 * 60_000)
 
     // Still inside the retry window: skipped.
     h.clock.value += 10 * 60_000
     expect(await h.runner.run(false)).toEqual({ kind: 'skipped', reason: 'cooldown' })
+    expect(h.state.lastPhase2At).toBe(h.clock.value - 10 * 60_000)
 
     // Past the retry window: runs again and succeeds.
     h.clock.value += 6 * 60_000
     const retried = await h.runner.run(false)
     expect(retried.kind).toBe('consolidated')
     expect(h.state.pendingConsolidation).toBe(false)
+    // Success clears the retry window.
+    expect(h.state.nextAutoRetryAt).toBe(0)
   })
 
   it('promotes skills from the memory_write tool call into skills/', async () => {

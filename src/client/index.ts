@@ -163,18 +163,14 @@ const EFFORT_LABELS: Record<string, string> = {
   max: '最大',
 }
 
-/** 模型未暴露推理元数据时的兜底等级列表（DeepSeek 官方等级）。 */
-const FALLBACK_EFFORTS: ReasoningEffortEntry[] = [
-  { id: 'off', name: 'off' },
-  { id: 'low', name: 'low' },
-  { id: 'high', name: 'high' },
-  { id: 'max', name: 'max' },
-]
-
+/**
+ * 推理等级选项：只取适配器实际暴露的等级。适配器不暴露元数据时返回空
+ * 数组（不展示兜底列表），避免用户选择运行期会被静默忽略的等级。
+ */
 function effortOptions(payload: StatePayload | null): Array<{ id: string; label: string }> {
   const raw = payload?.reasoningEfforts
-  const efforts = Array.isArray(raw) && raw.length > 0 ? raw : FALLBACK_EFFORTS
-  return efforts.map(effort => ({
+  if (!Array.isArray(raw) || raw.length === 0) return []
+  return raw.map(effort => ({
     id: effort.id,
     label: EFFORT_LABELS[effort.id] ?? effort.name ?? effort.id,
   }))
@@ -546,15 +542,24 @@ function MemorySettings(): React.ReactNode {
     hint === undefined ? null : el('p', { className: 'dm-dimmed' }, hint))
 
   /** 推理等级下拉：留空 = 跟随模型默认，其余选项来自适配器暴露的等级。 */
-  const effortSelect = (key: string, label: string, hint: string): React.ReactNode => el('div', { className: 'dm-field' },
-    el('div', { className: 'dm-label' }, label),
-    el('select', {
-      className: 'dm-input', value: String(form[key] ?? ''), disabled: busy,
-      onChange: (event: { target: { value: string } }) => set(key, event.target.value),
-    },
-      el('option', { value: '' }, '默认（跟随模型）'),
-      effortOptions(payload).map(option => el('option', { key: option.id, value: option.id }, option.label))),
-    el('p', { className: 'dm-dimmed' }, hint))
+  const effortSelect = (key: string, label: string, hint: string): React.ReactNode => {
+    const options = effortOptions(payload)
+    const control = options.length > 0
+      ? el('select', {
+        className: 'dm-input', value: String(form[key] ?? ''), disabled: busy,
+        onChange: (event: { target: { value: string } }) => set(key, event.target.value),
+      },
+        el('option', { value: '' }, '默认（跟随模型）'),
+        options.map(option => el('option', { key: option.id, value: option.id }, option.label)))
+      : el('select', {
+        className: 'dm-input', value: '', disabled: true, title: '当前路由的模型未暴露思考等级元数据',
+      },
+        el('option', { value: '' }, '该模型未暴露思考等级（按默认执行）'))
+    return el('div', { className: 'dm-field' },
+      el('div', { className: 'dm-label' }, label),
+      control,
+      el('p', { className: 'dm-dimmed' }, hint))
+  }
 
   const stat = (label: string, value: string): React.ReactNode => el('div', { className: 'dm-stat' },
     el('b', null, value), el('span', null, label))
@@ -625,10 +630,15 @@ function MemorySettings(): React.ReactNode {
 
   const treeNodes = tree === null ? [] : buildTree(tree)
 
-  const guardNotice = selectedPath !== null && CORE_FILES.includes(selectedPath)
-    ? el('div', { style: { padding: '12px 16px 0' } },
-      el('p', { className: 'dm-warn' }, '这是系统自动生成/维护的核心记忆文件（每次管道整合都会全量重写），手工改动很可能被覆盖或破坏插件行为。除非你非常清楚要做什么，否则不要修改。'))
-    : null
+  const guardNotice = selectedPath === null
+    ? null
+    : CORE_FILES.includes(selectedPath)
+      ? el('div', { style: { padding: '12px 16px 0' } },
+        el('p', { className: 'dm-warn' }, '这是系统自动生成/维护的核心记忆文件（每次管道整合都会全量重写），手工改动很可能被覆盖或破坏插件行为；该文件受保护，无法删除。除非你非常清楚要做什么，否则不要修改。'))
+      : selectedPath.startsWith('rollout_summaries/.retired/')
+        ? el('div', { style: { padding: '12px 16px 0' } },
+          el('p', { className: 'dm-warn' }, '这是已退役的回顾存档（遗忘系统只做可恢复的退役、不硬删）。该文件受保护，无法删除。'))
+        : null
 
   const editorView = selectedPath === null
     ? el('div', { className: 'dm-editcol' },
@@ -650,7 +660,7 @@ function MemorySettings(): React.ReactNode {
           : el('p', { className: editorNotice.kind === 'ok' ? 'dm-ok' : 'dm-error', style: { margin: 0 } }, editorNotice.text),
         el('button', {
           className: `dm-btn ${deleteArmed ? 'armed' : 'danger'}`,
-          disabled: editorBusy,
+          disabled: editorBusy || (selectedPath !== null && (CORE_FILES.includes(selectedPath) || selectedPath.startsWith('rollout_summaries/.retired/'))),
           onClick: () => { void deleteSelected() },
         }, deleteArmed ? '再次点击确认删除' : '删除'),
         el('button', { className: 'dm-btn primary', disabled: editorBusy, onClick: () => { void saveDraft() } }, '保存')))

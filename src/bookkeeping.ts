@@ -24,6 +24,9 @@ const UNIT = { name: 'dsh_memory', version: 1, tables: ['state'], hasGlobal: fal
 const KEY = 'main'
 const ORPHAN_RUNNING_MS = 30 * 60_000
 
+/** Automatic retry window after a failed consolidation (before the full cooldown). */
+export const PHASE2_RETRY_MS = 15 * 60_000
+
 function freshState(): MemoryState {
   return {
     v: 1,
@@ -34,6 +37,7 @@ function freshState(): MemoryState {
     overrides: {},
     usage: {},
     retiredAt: {},
+    nextAutoRetryAt: 0,
   }
 }
 
@@ -83,6 +87,7 @@ export class MemoryStateStore {
           // Older archives lack these fields; keep the maps defined.
           usage: record.usage ?? {},
           retiredAt: record.retiredAt ?? {},
+          nextAutoRetryAt: record.nextAutoRetryAt ?? 0,
         }
         this.recoverOrphans()
       }
@@ -149,7 +154,13 @@ export class MemoryStateStore {
   }
 
   snapshot(): MemoryState {
-    return { ...this.state, processed: { ...this.state.processed }, overrides: { ...this.state.overrides } }
+    return {
+      ...this.state,
+      processed: { ...this.state.processed },
+      overrides: { ...this.state.overrides },
+      usage: { ...(this.state.usage ?? {}) },
+      retiredAt: { ...(this.state.retiredAt ?? {}) },
+    }
   }
 
   processedOf(id: string): SessionClaim | undefined {
@@ -244,8 +255,10 @@ export class MemoryStateStore {
     this.state.lastPhase2At = at
     if (error === undefined) {
       delete this.state.phase2Error
-      // A successful consolidation resets the consecutive-failure counter.
+      // A successful consolidation resets the consecutive-failure counter and
+      // clears any pending retry window.
       this.state.phase2Failures = 0
+      this.state.nextAutoRetryAt = 0
     } else {
       this.state.phase2Error = error.slice(0, 500)
     }
@@ -253,20 +266,27 @@ export class MemoryStateStore {
   }
 
   /**
-   * Record a failed consolidation: schedules the retry window and bumps the
-   * consecutive-failure counter so automatic retries pause at the cap.
-   * Returns the new counter value.
+   * Record a failed consolidation: keeps `lastPhase2At` at the real attempt
+   * time, schedules the automatic retry window (`at + retryAfterMs`), and
+   * bumps the consecutive-failure counter so automatic retries pause at the
+   * cap. Returns the new counter value.
    */
-  recordPhase2Failure(at: number, error: string): number {
+  recordPhase2Failure(at: number, error: string, retryAfterMs = PHASE2_RETRY_MS): number {
     this.state.lastPhase2At = at
     this.state.phase2Error = error.slice(0, 500)
     this.state.phase2Failures = (this.state.phase2Failures ?? 0) + 1
+    this.state.nextAutoRetryAt = at + retryAfterMs
     this.queueSave()
     return this.state.phase2Failures
   }
 
   get phase2Failures(): number {
     return this.state.phase2Failures ?? 0
+  }
+
+  /** Earliest epoch ms an automatic Phase 2 retry may run (0 = no window pending). */
+  get nextAutoRetryAt(): number {
+    return this.state.nextAutoRetryAt ?? 0
   }
 
   /** Reset the consecutive-failure counter (new extraction input arrives). */

@@ -189,17 +189,25 @@ describe('MemoryStateStore', () => {
     const store = new MemoryStateStore(() => facility)
     await store.init()
     expect(store.phase2Failures).toBe(0)
+    expect(store.nextAutoRetryAt).toBe(0)
 
     expect(store.recordPhase2Failure(1000, 'boom 1')).toBe(1)
     expect(store.recordPhase2Failure(2000, 'boom 2')).toBe(2)
     expect(store.phase2Failures).toBe(2)
     expect(store.phase2Error).toBe('boom 2')
+    // The failure schedules a retry window relative to the real attempt time.
+    expect(store.nextAutoRetryAt).toBe(2000 + 15 * 60_000)
+    expect(store.lastPhase2At).toBe(2000)
 
     store.recordPhase2(3000)
     expect(store.phase2Failures).toBe(0)
     expect(store.phase2Error).toBeUndefined()
+    // A successful run clears the retry window.
+    expect(store.nextAutoRetryAt).toBe(0)
+    expect(store.lastPhase2At).toBe(3000)
 
-    store.recordPhase2Failure(4000, 'boom again')
+    store.recordPhase2Failure(4000, 'boom again', 60_000)
+    expect(store.nextAutoRetryAt).toBe(4000 + 60_000)
     store.resetPhase2Failures()
     expect(store.phase2Failures).toBe(0)
     await store.dispose()

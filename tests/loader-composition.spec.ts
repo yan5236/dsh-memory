@@ -114,6 +114,7 @@ describe('real Cordis Loader composition', () => {
     }
     const req = {
       method: 'POST',
+      headers: { host: '127.0.0.1:3080', origin: 'http://127.0.0.1:3080' },
       async *[Symbol.asyncIterator](): AsyncIterator<string> {
         yield JSON.stringify({ method: 'get-state', args: {} })
       },

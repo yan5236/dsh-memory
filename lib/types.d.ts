@@ -42,6 +42,13 @@ export interface MemoryState {
     retiredAt?: Record<string, number>;
     /** Consecutive Phase 2 failures; pauses automatic retries at the cap. */
     phase2Failures?: number;
+    /**
+     * Earliest epoch ms at which an automatic Phase 2 retry is allowed after a
+     * failure (0 = no retry window pending; the full cooldown applies). Kept
+     * separate from `lastPhase2At` so that timestamp stays the real last
+     * attempt time.
+     */
+    nextAutoRetryAt?: number;
 }
 /** Minimal structural view of a DSH session header. */
 export interface SessionHeaderLite {

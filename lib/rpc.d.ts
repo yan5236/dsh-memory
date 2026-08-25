@@ -7,6 +7,7 @@ import type { Phase1Runner } from './phase1.js';
 import type { Phase2Runner } from './phase2.js';
 export interface HttpRequestLike {
     method?: string;
+    headers?: Record<string, string | string[] | undefined>;
     [Symbol.asyncIterator](): AsyncIterator<unknown>;
 }
 export interface HttpResponseLike {
@@ -92,6 +93,25 @@ export interface StatePayload {
         phase2Failures: number;
     };
 }
+/**
+ * Same-origin guard for the RPC endpoint. The DSH webServer performs no
+ * auth/CSRF checks of its own (pure route dispatch), so this plugin must:
+ * - reject requests whose `Host` is not loopback → blocks DNS-rebinding;
+ * - reject browser requests whose `Origin` is not loopback → blocks
+ *   cross-origin POSTs from arbitrary pages (the JSON body is accepted
+ *   regardless of content-type, so a `text/plain` fetch would otherwise slip
+ *   through CORS preflight).
+ * Requests without an `Origin` (curl, local tooling) are allowed: such
+ * clients already hold full machine access, matching the localhost threat
+ * model. Returns a short human-readable reason, or null when allowed.
+ */
+export declare function originGuard(headers: Record<string, string | string[] | undefined> | undefined): string | null;
+/**
+ * Reason a `delete-file` call is refused, or null when deletion is allowed.
+ * Retro-archived summaries and core pipeline files are hard-refused; the
+ * vault cannot permanently delete what forgetting only ever "retires".
+ */
+export declare function protectedDeleteReason(path: string): string | null;
 /** Register the `/dsh-memory/rpc` route; returns the route disposer. */
 export declare function registerRpc(webServer: WebServerRuntime, deps: RpcDeps): () => void;
 //# sourceMappingURL=rpc.d.ts.map

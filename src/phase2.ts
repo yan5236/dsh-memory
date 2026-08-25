@@ -28,9 +28,6 @@ export interface Phase2Deps {
   now?: () => number
 }
 
-/** Automatic retry window after a failed consolidation (before the full cooldown). */
-const FAILURE_RETRY_MS = 15 * 60_000
-
 /** Model-supplied skill write request (validated before hitting the filesystem). */
 interface SkillRequest {
   name: string
@@ -89,15 +86,18 @@ export class Phase2Runner {
         await writeLog(outcome, { consecutiveFailures: state.phase2Failures })
         return outcome
       }
+      // A failed run schedules a retry window (~15 min); inside it the
+      // cooldown still applies, past it the run is allowed again.
+      const autoRetryDue = state.nextAutoRetryAt > 0 && now >= state.nextAutoRetryAt
+      if (now - state.lastPhase2At < cfg.consolidationCooldownMs && !autoRetryDue) {
+        const outcome = { kind: 'skipped', reason: 'cooldown' } as const
+        await writeLog(outcome)
+        return outcome
+      }
       // Ad hoc notes alone must also be able to wake consolidation, even when
       // an earlier run cleared the pending flag before the notes were merged.
       if (!state.pendingConsolidation && !(await files.hasPendingNotes())) {
         const outcome = { kind: 'skipped', reason: 'no-input' } as const
-        await writeLog(outcome)
-        return outcome
-      }
-      if (now - state.lastPhase2At < cfg.consolidationCooldownMs) {
-        const outcome = { kind: 'skipped', reason: 'cooldown' } as const
         await writeLog(outcome)
         return outcome
       }
@@ -287,10 +287,10 @@ export class Phase2Runner {
       return outcome
     } catch (error: unknown) {
       // Keep the pending flag and schedule an automatic retry in ~15 minutes
-      // instead of freezing behind the full cooldown; manual runs stay available.
-      const retryAt = Math.max(0, now - cfg.consolidationCooldownMs + FAILURE_RETRY_MS)
+      // instead of freezing behind the full cooldown; manual runs stay
+      // available. `lastPhase2At` keeps the real attempt time.
       const detail = `${messageOf(error)} (route=${modelRoute.provider}/${modelRoute.model})`
-      const failures = state.recordPhase2Failure(retryAt, detail)
+      const failures = state.recordPhase2Failure(now, detail)
       const outcome = { kind: 'error', error: detail } as const
       await writeLog(outcome, {
         error: detail,
