@@ -1,4 +1,4 @@
-/** Phase 2: global consolidation into MEMORY.md and memory_summary.md. */
+/** Phase 2: global consolidation into MEMORY.md and memory_summary.md, plus skill promotion and forgetting. */
 import type { MemoryStateStore } from './bookkeeping.js';
 import type { Config } from './config.js';
 import type { MemoryFiles } from './files.js';
@@ -8,11 +8,13 @@ export type Phase2Outcome = {
     mode: 'init' | 'incremental';
 } | {
     kind: 'skipped';
-    reason: 'cooldown' | 'no-input' | 'no-route';
+    reason: 'cooldown' | 'no-input' | 'no-route' | 'retry-paused';
 } | {
     kind: 'error';
     error: string;
 };
+/** Automatic retries pause after this many consecutive failures (manual runs bypass). */
+export declare const MAX_AUTO_PHASE2_RETRIES = 3;
 export interface Phase2Deps {
     llm: LlmRuntime;
     state: MemoryStateStore;
@@ -26,6 +28,8 @@ export declare class Phase2Runner {
     private readonly deps;
     private running;
     constructor(deps: Phase2Deps);
+    /** Whether a consolidation is currently in flight (single-flight promise alive). */
+    get isRunning(): boolean;
     /** Single-flight entry point; `force` bypasses the cooldown for manual runs. */
     run(force?: boolean): Promise<Phase2Outcome>;
     private execute;

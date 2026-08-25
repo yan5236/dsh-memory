@@ -77,5 +77,73 @@ describe('MemoryFiles', () => {
     expect(stats.memoryChars).toBe(6)
     expect(stats.summaryChars).toBeGreaterThan(0)
     expect(stats.rollouts).toBe(2)
+    expect(stats.retired).toBe(0)
+  })
+
+  it('writes run logs and lists them newest first', async () => {
+    const files = await makeFiles()
+    await files.ensureLayout()
+    await files.writeRunLog('phase1', { outcome: 'done 1', detail: { done: 1 } }, 1000)
+    await files.writeRunLog('phase2', { outcome: 'consolidated', detail: { memoryChars: 5 } }, 3000)
+    await files.writeRunLog('phase1', { outcome: 'skipped', detail: {} }, 2000)
+    const logs = await files.listRunLogs()
+    expect(logs.map(entry => entry.outcome)).toEqual(['consolidated', 'skipped', 'done 1'])
+    expect(logs[0]?.at).toBe(3000)
+    expect(logs[0]?.stage).toBe('phase2')
+    expect(logs[1]?.detail).toBeUndefined()
+    expect((await files.stats()).logCount).toBe(3)
+  })
+
+  it('prunes run logs beyond the cap, keeping the newest', async () => {
+    const files = await makeFiles()
+    await files.ensureLayout()
+    for (let index = 0; index < 55; index += 1) {
+      await files.writeRunLog('phase1', { outcome: `run ${index}`, detail: {} }, 1000 + index)
+    }
+    const logs = await files.listRunLogs(200)
+    expect(logs.length).toBe(50)
+    expect(logs[0]?.outcome).toBe('run 54')
+    expect(logs.every(entry => Number(entry.name.slice(0, 4)) >= 1970)).toBe(true)
+  })
+
+  it('retires rollout summaries into .retired and counts them separately', async () => {
+    const files = await makeFiles()
+    await files.ensureLayout()
+    await files.writeAtomic('rollout_summaries/stale.md', 'old')
+    await files.writeAtomic('rollout_summaries/fresh.md', 'new')
+    const moved = await files.retireRolloutSummary('stale')
+    expect(moved).toBe('rollout_summaries/.retired/stale.md')
+    expect(await files.readIfExists('rollout_summaries/stale.md')).toBeUndefined()
+    expect(await files.readIfExists('rollout_summaries/.retired/stale.md')).toBe('old')
+
+    const stats = await files.stats()
+    expect(stats.rollouts).toBe(1)
+    expect(stats.retired).toBe(1)
+
+    // Rollout index must not surface retired files.
+    const index = await files.rolloutIndex()
+    expect(index.some(line => line.includes('.retired'))).toBe(false)
+    expect(index.some(line => line.includes('fresh.md'))).toBe(true)
+  })
+
+  it('handles retired-name collisions with a timestamp suffix and missing files', async () => {
+    const files = await makeFiles()
+    await files.ensureLayout()
+    await files.writeAtomic('rollout_summaries/x.md', 'first')
+    await files.writeAtomic('rollout_summaries/.retired/x.md', 'already retired')
+    const moved = await files.retireRolloutSummary('x', 1700000000000)
+    expect(moved).toBe('rollout_summaries/.retired/x-1700000000000.md')
+    expect(await files.readIfExists(moved)).toBe('first')
+    // Missing source returns undefined instead of throwing.
+    expect(await files.retireRolloutSummary('never-existed')).toBeUndefined()
+  })
+
+  it('rejects invalid slugs and path traversal in retire requests', async () => {
+    const files = await makeFiles()
+    await files.ensureLayout()
+    await expect(files.retireRolloutSummary('../escape')).rejects.toThrow('invalid rollout summary slug')
+    await expect(files.retireRolloutSummary('a/b')).rejects.toThrow('invalid rollout summary slug')
+    await expect(files.retireRolloutSummary('')).rejects.toThrow('invalid rollout summary slug')
+    await expect(files.retireRolloutSummary('UPPER Case')).rejects.toThrow('invalid rollout summary slug')
   })
 })

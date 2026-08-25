@@ -28,6 +28,8 @@ export declare class Phase1Runner {
     private readonly deps;
     private running;
     constructor(deps: Phase1Deps);
+    /** Whether an extraction batch is currently in flight (single-flight promise alive). */
+    get isRunning(): boolean;
     /** Single-flight entry point used by the scheduler and the settings page. */
     run(): Promise<Phase1Summary>;
     private execute;

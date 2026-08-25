@@ -325,5 +325,31 @@ describe('Phase1Runner', () => {
     })
     const summary = await runner.run()
     expect(summary.skippedNoRoute).toBe(true)
+
+    const logs = await files.listRunLogs()
+    expect(logs).toHaveLength(1)
+    expect(logs[0]?.outcome).toBe('skipped:no-route')
+  })
+
+  it('writes a run log with per-session outcomes after a batch', async () => {
+    const h = await harness([PHASE1_JSON('first'), PHASE1_JSON('second')])
+    h.headers.push(activeHeader('s1'), activeHeader('s2'))
+    h.setEvents('s1', [userMessage('任务一'), userMessage('补充'), userMessage('补充'), userMessage('补充')])
+    h.setEvents('s2', [userMessage('任务二'), userMessage('补充'), userMessage('补充'), userMessage('补充')])
+
+    await h.runner.run()
+    const logs = await h.files.listRunLogs()
+    expect(logs).toHaveLength(1)
+    expect(logs[0]?.stage).toBe('phase1')
+    expect(logs[0]?.route).toBe('mock/mock')
+    expect(logs[0]?.outcome).toContain('done 2/2')
+
+    const full = await h.files.readIfExists(`logs/${logs[0]!.name}`)
+    const parsed = JSON.parse(full!) as { detail: { summary: unknown; sessions: Array<{ id: string; outcome: string }> } }
+    expect(parsed.detail.summary).toMatchObject({ selected: 2, done: 2 })
+    expect(parsed.detail.sessions).toEqual([
+      { id: 's1', outcome: 'done' },
+      { id: 's2', outcome: 'done' },
+    ])
   })
 })

@@ -66,6 +66,8 @@ export function registerMemoryTools(
     async execute(args: { path: string }): Promise<string> {
       const content = await files.readIfExists(args.path, MAX_READ_CHARS)
       if (content === undefined) return `记忆库中不存在该文件：${args.path}（可用 memory_list 查看现有文件）`
+      // Read-path usage: a successful read counts as "this memory was used".
+      state.recordUsage(args.path, Date.now())
       if (content.length >= MAX_READ_CHARS) {
         return `${content}\n…（文件过大已截断至 ${MAX_READ_CHARS} 字符）`
       }
@@ -91,6 +93,8 @@ export function registerMemoryTools(
       const entries = await files.listTree()
       const filesToScan = entries.filter(entry => entry.kind === 'file' && entry.path.endsWith('.md') && entry.size <= MAX_SEARCH_FILE_BYTES)
       const hits: string[] = []
+      // Read-path usage: files the search actually surfaced count as used (deduped).
+      const used = new Set<string>()
       outer: for (const entry of filesToScan.slice(0, MAX_SEARCH_FILES)) {
         const content = await files.readIfExists(entry.path, MAX_SEARCH_FILE_BYTES)
         if (content === undefined) continue
@@ -98,10 +102,13 @@ export function registerMemoryTools(
         for (let index = 0; index < lines.length; index += 1) {
           const line = lines[index] ?? ''
           if (!line.toLowerCase().includes(query)) continue
+          used.add(entry.path)
           hits.push(`${entry.path}:${index + 1}  ${line.trim().slice(0, 200)}`)
           if (hits.length >= max) break outer
         }
       }
+      const now = Date.now()
+      for (const path of used) state.recordUsage(path, now)
       if (hits.length === 0) return `在记忆库中未找到与 "${args.query}" 匹配的内容。`
       return hits.join('\n')
     },

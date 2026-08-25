@@ -131,4 +131,77 @@ describe('MemoryStateStore', () => {
     expect(store.processedOf('b')).toMatchObject({ status: 'noop', lastSeq: 4 })
     await store.dispose()
   })
+
+  it('records per-file usage, counting and last-use timestamps', async () => {
+    const { facility } = fakeKv()
+    const store = new MemoryStateStore(() => facility)
+    await store.init()
+    expect(store.usageOf('rollout_summaries/a.md')).toBeUndefined()
+    store.recordUsage('rollout_summaries/a.md', 1000)
+    store.recordUsage('rollout_summaries/a.md', 2000)
+    store.recordUsage('MEMORY.md', 1500)
+    expect(store.usageOf('rollout_summaries/a.md')).toEqual({ count: 2, lastAt: 2000 })
+    expect(store.usageCount).toBe(2)
+    expect(store.usageSnapshot()).toEqual({
+      'rollout_summaries/a.md': { count: 2, lastAt: 2000 },
+      'MEMORY.md': { count: 1, lastAt: 1500 },
+    })
+    await store.dispose()
+  })
+
+  it('persists usage and retired state across store instances', async () => {
+    const { facility } = fakeKv()
+    const first = new MemoryStateStore(() => facility)
+    await first.init()
+    first.recordUsage('rollout_summaries/a.md', 1000)
+    first.recordRetired('stale-slug', 2500)
+    await first.dispose()
+
+    const second = new MemoryStateStore(() => facility)
+    await second.init()
+    expect(second.usageOf('rollout_summaries/a.md')).toEqual({ count: 1, lastAt: 1000 })
+    expect(second.retiredAtOf('stale-slug')).toBe(2500)
+    expect(second.retiredAtOf('other')).toBeUndefined()
+    await second.dispose()
+  })
+
+  it('loads legacy archives without usage/retired fields', async () => {
+    const { facility, records } = fakeKv()
+    records.set('main', {
+      v: 1,
+      processed: { s1: { status: 'done', at: 1, attempts: 0 } },
+      lastPhase1At: 0,
+      lastPhase2At: 0,
+      pendingConsolidation: false,
+      overrides: {},
+    })
+    const store = new MemoryStateStore(() => facility)
+    await store.init()
+    expect(store.usageCount).toBe(0)
+    expect(store.usageSnapshot()).toEqual({})
+    expect(store.retiredAtOf('x')).toBeUndefined()
+    expect(() => store.recordUsage('MEMORY.md', 5)).not.toThrow()
+    await store.dispose()
+  })
+
+  it('counts consecutive phase2 failures, clears on success, and resets explicitly', async () => {
+    const { facility } = fakeKv()
+    const store = new MemoryStateStore(() => facility)
+    await store.init()
+    expect(store.phase2Failures).toBe(0)
+
+    expect(store.recordPhase2Failure(1000, 'boom 1')).toBe(1)
+    expect(store.recordPhase2Failure(2000, 'boom 2')).toBe(2)
+    expect(store.phase2Failures).toBe(2)
+    expect(store.phase2Error).toBe('boom 2')
+
+    store.recordPhase2(3000)
+    expect(store.phase2Failures).toBe(0)
+    expect(store.phase2Error).toBeUndefined()
+
+    store.recordPhase2Failure(4000, 'boom again')
+    store.resetPhase2Failures()
+    expect(store.phase2Failures).toBe(0)
+    await store.dispose()
+  })
 })

@@ -32,12 +32,23 @@ export interface Config {
   consolidationCooldownMs: number
   /** Hard cap on raw memories fed into one consolidation call. */
   maxRawChars: number
-  /** Output token cap for one Phase 2 consolidation call. */
+  /**
+   * Output token cap for one Phase 2 consolidation call. Defaults high
+   * because the model rewrites MEMORY.md in full and reasoning models burn
+   * budget inside this cap; raise it when consolidation keeps truncating.
+   */
   phase2MaxTokens: number
   /** Hard cap on the memory summary injected into the system prompt. */
   maxSummaryChars: number
   /** Extraction attempts before a session is permanently failed. */
   retryLimit: number
+  /**
+   * Forgetting threshold: rollout summaries whose last use (or creation, when
+   * never used) is older than this many days become forgetting candidates in
+   * Phase 2; the model may retire them into `rollout_summaries/.retired/`.
+   * 0 disables the forgetting mechanism. Default 30 aligns with Codex.
+   */
+  maxUnusedDays: number
 }
 
 export const DEFAULTS: Config = {
@@ -56,9 +67,10 @@ export const DEFAULTS: Config = {
   phase1MaxTokens: 4_096,
   consolidationCooldownMs: 6 * 60 * 60_000,
   maxRawChars: 120_000,
-  phase2MaxTokens: 12_000,
+  phase2MaxTokens: 32_768,
   maxSummaryChars: 8_000,
   retryLimit: 3,
+  maxUnusedDays: 30,
 }
 
 export const Config: z<Config> = z.object({
@@ -80,6 +92,7 @@ export const Config: z<Config> = z.object({
   phase2MaxTokens: z.number().default(DEFAULTS.phase2MaxTokens),
   maxSummaryChars: z.number().default(DEFAULTS.maxSummaryChars),
   retryLimit: z.number().default(DEFAULTS.retryLimit),
+  maxUnusedDays: z.number().default(DEFAULTS.maxUnusedDays),
 })
 
 /** Merge composition base and runtime overrides over schema defaults. */
@@ -114,6 +127,7 @@ export const OVERRIDABLE_KEYS = [
   'phase2MaxTokens',
   'maxSummaryChars',
   'retryLimit',
+  'maxUnusedDays',
 ] as const
 
 export type OverridableKey = (typeof OVERRIDABLE_KEYS)[number]
@@ -131,9 +145,10 @@ const RANGES: Record<OverridableKey, readonly [number, number]> = {
   phase1MaxTokens: [256, 16_384],
   consolidationCooldownMs: [60_000, 7 * 24 * 60 * 60_000],
   maxRawChars: [10_000, 500_000],
-  phase2MaxTokens: [512, 32_768],
+  phase2MaxTokens: [512, 131_072],
   maxSummaryChars: [1_000, 50_000],
   retryLimit: [1, 10],
+  maxUnusedDays: [0, 730],
 }
 
 /** Validate and clamp one settings-page override patch. */

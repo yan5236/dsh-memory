@@ -54,6 +54,33 @@ export declare class MemoryStateStore {
     get phase2Error(): string | undefined;
     recordPhase1(at: number): void;
     recordPhase2(at: number, error?: string): void;
+    /**
+     * Record a failed consolidation: schedules the retry window and bumps the
+     * consecutive-failure counter so automatic retries pause at the cap.
+     * Returns the new counter value.
+     */
+    recordPhase2Failure(at: number, error: string): number;
+    get phase2Failures(): number;
+    /** Reset the consecutive-failure counter (new extraction input arrives). */
+    resetPhase2Failures(): void;
+    /**
+     * Record one read-path usage event for a memory file (Codex
+     * `record_stage1_output_usage` parity, keyed by relative path instead of
+     * thread id because forgetting executes on files).
+     */
+    recordUsage(path: string, at: number): void;
+    usageOf(path: string): {
+        count: number;
+        lastAt: number;
+    } | undefined;
+    usageSnapshot(): Record<string, {
+        count: number;
+        lastAt: number;
+    }>;
+    get usageCount(): number;
+    /** Mark a rollout summary slug as retired (moved to `.retired/`). */
+    recordRetired(slug: string, at: number): void;
+    retiredAtOf(slug: string): number | undefined;
     setOverrides(overrides: Partial<Config>): void;
     /** Re-queue every failed claim so the next pipeline run retries them. */
     resetFailedClaims(): number;

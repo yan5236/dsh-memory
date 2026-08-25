@@ -68,6 +68,11 @@ export class Phase1Runner {
 
   constructor(private readonly deps: Phase1Deps) {}
 
+  /** Whether an extraction batch is currently in flight (single-flight promise alive). */
+  get isRunning(): boolean {
+    return this.running !== undefined
+  }
+
   /** Single-flight entry point used by the scheduler and the settings page. */
   run(): Promise<Phase1Summary> {
     if (this.running !== undefined) return this.running
@@ -83,10 +88,12 @@ export class Phase1Runner {
     await files.ensureLayout()
     const reader = this.deps.sessions()
     if (reader === undefined) {
+      await files.writeRunLog('phase1', { outcome: 'skipped:no-sessions', detail: {} }).catch(() => {})
       return { selected: 0, done: 0, noop: 0, failed: 0, unchanged: 0, skippedNoRoute: false, skippedNoSessions: true }
     }
     const route = this.deps.route()
     if (route === undefined) {
+      await files.writeRunLog('phase1', { outcome: 'skipped:no-route', detail: {} }).catch(() => {})
       return { selected: 0, done: 0, noop: 0, failed: 0, unchanged: 0, skippedNoRoute: true, skippedNoSessions: false }
     }
     const clock = this.deps.now ?? Date.now
@@ -105,10 +112,12 @@ export class Phase1Runner {
     let failed = 0
     let unchanged = 0
     let index = 0
+    const sessions: Array<{ id: string; outcome: ExtractOutcome }> = []
     const workers = Array.from({ length: Math.max(1, cfg.extractionConcurrency) }, async () => {
       while (index < selection.candidates.length) {
         const header = selection.candidates[index++]!
         const outcome = await this.extractOne(header, route, cfg)
+        sessions.push({ id: header.id, outcome })
         if (outcome === 'done') done += 1
         else if (outcome === 'noop') noop += 1
         else if (outcome === 'unchanged') unchanged += 1
@@ -116,9 +125,13 @@ export class Phase1Runner {
       }
     })
     await Promise.all(workers)
-    if (done > 0) state.setPendingConsolidation(true)
+    if (done > 0) {
+      state.setPendingConsolidation(true)
+      // Fresh extraction input: lift the Phase 2 auto-retry pause.
+      state.resetPhase2Failures()
+    }
     state.recordPhase1(clock())
-    return {
+    const summary = {
       selected: selection.candidates.length,
       done,
       noop,
@@ -127,6 +140,13 @@ export class Phase1Runner {
       skippedNoRoute: false,
       skippedNoSessions: false,
     }
+    const outcomeText = `done ${done}/${summary.selected} (noop ${noop}, unchanged ${unchanged}, failed ${failed})`
+    await files.writeRunLog('phase1', {
+      route: `${route.provider}/${route.model}`,
+      outcome: outcomeText,
+      detail: { summary, sessions },
+    }).catch(() => {})
+    return summary
   }
 
   private async extractOne(

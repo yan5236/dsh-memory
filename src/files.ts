@@ -2,12 +2,24 @@
 
 import { randomUUID } from 'node:crypto'
 import type { Dirent } from 'node:fs'
-import { appendFile, mkdir, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, readFile, readdir, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve, sep } from 'node:path'
 import { isWithin } from './paths.js'
-import type { FileEntry } from './types.js'
+import type { FileEntry, RunLogEntry, RunLogSummary } from './types.js'
 
-const DIRS = ['rollout_summaries', 'skills', 'extensions/ad_hoc/notes'] as const
+const DIRS = ['rollout_summaries', 'rollout_summaries/.retired', 'skills', 'extensions/ad_hoc/notes', 'logs'] as const
+
+/** Upper bound on retained run-log files; oldest are pruned beyond this. */
+export const MAX_RUN_LOGS = 50
+
+/** Hard cap on one log file read for listing (defensive; outputs are smaller). */
+const RUN_LOG_LIST_CAP = 400_000
+
+/** Slug shape accepted by retire/unretire operations (matches sanitizeSlug output). */
+const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]{0,79}$/
+
+/** Allowed auxiliary subdirectories inside a skill folder. */
+const SKILL_SUBDIRS = ['scripts', 'templates', 'examples'] as const
 
 /**
  * Owns the memory directory:
@@ -124,6 +136,7 @@ export class MemoryFiles {
     const lines: string[] = []
     for (const entry of entries) {
       if (entry.kind !== 'file' || !entry.path.endsWith('.md')) continue
+      if (MemoryFiles.isRetiredPath(entry.path)) continue
       const content = await this.readIfExists(`rollout_summaries/${entry.path.split('/').pop() ?? ''}`, 4_000)
       const firstLine = content?.split(/\r?\n/).map(line => line.trim()).find(line => line !== '' && !line.startsWith('<!--'))
       lines.push(`- ${entry.path}${firstLine === undefined ? '' : ` — ${firstLine.slice(0, 120)}`}`)
@@ -160,6 +173,142 @@ export class MemoryFiles {
     await rename(source, target)
   }
 
+  /** Persist one pipeline run under `logs/`; prunes oldest logs beyond MAX_RUN_LOGS. */
+  async writeRunLog(stage: 'phase1' | 'phase2', entry: Omit<RunLogEntry, 'at' | 'stage'>, at = Date.now()): Promise<string> {
+    const stamp = new Date(at).toISOString().replace(/[:.]/g, '-')
+    const log: RunLogEntry = { at, stage, ...entry }
+    const name = `${stamp}-${stage}.json`
+    await this.writeAtomic(`logs/${name}`, `${JSON.stringify(log, null, 2)}\n`)
+    await this.pruneRunLogs()
+    return name
+  }
+
+  /** Keep at most MAX_RUN_LOGS log files, deleting the oldest by timestamp name. */
+  async pruneRunLogs(): Promise<void> {
+    const entries = await this.listTree('logs')
+    const files = entries
+      .filter(entry => entry.kind === 'file' && entry.path.endsWith('.json'))
+      .sort((a, b) => a.path.localeCompare(b.path))
+    const excess = files.length - MAX_RUN_LOGS
+    for (const entry of files.slice(0, Math.max(0, excess))) {
+      await unlink(this.rel(`logs/${entry.path}`)).catch(() => {})
+    }
+  }
+
+  /** Summaries of the most recent run logs, newest first. */
+  async listRunLogs(limit = 20): Promise<RunLogSummary[]> {
+    const entries = await this.listTree('logs')
+    const files = entries
+      .filter(entry => entry.kind === 'file' && entry.path.endsWith('.json'))
+      .sort((a, b) => b.path.localeCompare(a.path))
+    const summaries: RunLogSummary[] = []
+    for (const file of files) {
+      if (summaries.length >= limit) break
+      const text = await this.readIfExists(`logs/${file.path}`, RUN_LOG_LIST_CAP)
+      if (text === undefined) continue
+      try {
+        const parsed = JSON.parse(text) as Partial<RunLogEntry>
+        if (typeof parsed.at !== 'number' || (parsed.stage !== 'phase1' && parsed.stage !== 'phase2')) continue
+        summaries.push({
+          name: file.path.split('/').pop() ?? file.path,
+          at: parsed.at,
+          stage: parsed.stage,
+          ...(typeof parsed.route === 'string' ? { route: parsed.route } : {}),
+          outcome: typeof parsed.outcome === 'string' ? parsed.outcome : 'unknown',
+          size: file.size,
+        })
+      } catch {
+        // Corrupt/partial log files are skipped for listing; the file itself stays.
+      }
+    }
+    return summaries
+  }
+
+  /**
+   * Move a rollout summary into `rollout_summaries/.retired/` (recoverable,
+   * never deleted). Returns the new relative path, or undefined when the
+   * source file does not exist.
+   */
+  async retireRolloutSummary(slug: string, at = Date.now()): Promise<string | undefined> {
+    if (!SLUG_PATTERN.test(slug)) throw new Error(`invalid rollout summary slug: ${slug}`)
+    let target = `rollout_summaries/.retired/${slug}.md`
+    const existing = await this.readIfExists(target, 1)
+    if (existing !== undefined) {
+      target = `rollout_summaries/.retired/${slug}-${at}.md`
+    }
+    const source = this.rel(`rollout_summaries/${slug}.md`)
+    const destination = this.rel(target)
+    await mkdir(dirname(destination), { recursive: true })
+    try {
+      await rename(source, destination)
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+      throw error
+    }
+    return target
+  }
+
+  /** Whether a path inside the rollout summaries tree refers to the retired area. */
+  static isRetiredPath(path: string): boolean {
+    return path.startsWith('.retired/') || path === '.retired'
+  }
+
+  /** Validate a skill directory name (lowercase alphanumerics and hyphens). */
+  static assertSkillName(name: string): void {
+    if (!SLUG_PATTERN.test(name)) {
+      throw new Error(`invalid skill name: ${name}（仅允许小写字母、数字与连字符）`)
+    }
+  }
+
+  /**
+   * Write a skill entrypoint `skills/<name>/SKILL.md`. Model-supplied names
+   * are validated before any filesystem call.
+   */
+  async writeSkill(name: string, skillMd: string): Promise<void> {
+    MemoryFiles.assertSkillName(name)
+    await this.writeAtomic(`skills/${name}/SKILL.md`, skillMd)
+  }
+
+  /**
+   * Write an auxiliary skill file under `skills/<name>/`. Only scripts/,
+   * templates/, and examples/ subdirectories are allowed; traversal and
+   * absolute paths are rejected.
+   */
+  async writeSkillFile(name: string, relPath: string, content: string): Promise<void> {
+    MemoryFiles.assertSkillName(name)
+    const parts = relPath.split('/')
+    if (parts.length < 2 || !(SKILL_SUBDIRS as readonly string[]).includes(parts[0] ?? '')) {
+      throw new Error(`skill file must live under scripts/ templates/ or examples/: ${relPath}`)
+    }
+    if (parts.some(part => part === '' || part === '..' || part.includes('\\') || /^[A-Za-z]:/.test(part))) {
+      throw new Error(`invalid skill file path: ${relPath}`)
+    }
+    await this.writeAtomic(`skills/${name}/${relPath}`, content)
+  }
+
+  /** Remove a whole skill directory after name validation. */
+  async removeSkill(name: string): Promise<void> {
+    MemoryFiles.assertSkillName(name)
+    const target = this.rel(`skills/${name}`)
+    await rm(target, { recursive: true, force: true }).catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    })
+  }
+
+  /** Inventory of existing skills: relative path and first meaningful line. */
+  async skillsIndex(limit = 40): Promise<string[]> {
+    const entries = await this.listTree('skills')
+    const lines: string[] = []
+    for (const entry of entries) {
+      if (entry.kind !== 'file' || !entry.path.endsWith('.md')) continue
+      const content = await this.readIfExists(`skills/${entry.path}`, 2_000)
+      const firstLine = content?.split(/\r?\n/).map(line => line.trim()).find(line => line !== '' && !line.startsWith('---') && !line.startsWith('<!--'))
+      lines.push(`- ${entry.path}${firstLine === undefined ? '' : ` — ${firstLine.slice(0, 100)}`}`)
+      if (lines.length >= limit) break
+    }
+    return lines
+  }
+
   async stats(): Promise<{
     summaryChars: number
     memoryChars: number
@@ -168,6 +317,8 @@ export class MemoryFiles {
     rollouts: number
     skills: number
     notes: number
+    retired: number
+    logCount: number
   }> {
     const [summary, memory, raw, archive] = await Promise.all([
       this.readIfExists('memory_summary.md', 10_000_000),
@@ -175,18 +326,26 @@ export class MemoryFiles {
       this.readIfExists('raw_memories.md', 10_000_000),
       this.readIfExists('raw_memories.archive.md', 10_000_000),
     ])
-    const rollouts = await this.listTree('rollout_summaries')
-    const skills = await this.listTree('skills')
-    const notes = await this.listTree('extensions/ad_hoc/notes')
-    const fileCount = (entries: FileEntry[]): number => entries.filter(entry => entry.kind === 'file').length
+    const [rollouts, skills, notes, retired, logs] = await Promise.all([
+      this.listTree('rollout_summaries'),
+      this.listTree('skills'),
+      this.listTree('extensions/ad_hoc/notes'),
+      this.listTree('rollout_summaries/.retired'),
+      this.listTree('logs'),
+    ])
+    const fileCount = (entries: FileEntry[], excludeRetired = false): number => entries.filter(entry =>
+      entry.kind === 'file'
+      && (!excludeRetired || !MemoryFiles.isRetiredPath(entry.path))).length
     return {
       summaryChars: summary?.length ?? 0,
       memoryChars: memory?.length ?? 0,
       rawChars: raw?.length ?? 0,
       archiveChars: archive?.length ?? 0,
-      rollouts: fileCount(rollouts),
+      rollouts: fileCount(rollouts, true),
       skills: fileCount(skills),
       notes: fileCount(notes),
+      retired: fileCount(retired),
+      logCount: fileCount(logs),
     }
   }
 

@@ -28,6 +28,12 @@
 - 🧩 **Phase 2 全局整合**：按冷却周期（默认 6 小时）把新记忆合并进 `MEMORY.md`
   （检索手册）与 `memory_summary.md`（首行 `v1` 协议的高密度导航摘要）；
   原始记忆归档轮转，永不重复整合。
+- 🛠️ **技能固化**：重复出现的可验证流程由整合器固化为 `skills/<name>/SKILL.md`
+  （含 YAML frontmatter 与触发条件），可附带 scripts/ templates/ examples/ 附属文件；
+  过时技能可显式删除。
+- 🕰️ **遗忘机制**：`memory_read` / `memory_search` 的查阅行为会记录使用次数与时间；
+  超过遗忘阈值（默认 30 天）未被查阅的回顾在整合时被标注为「候选遗忘」，
+  由整合器决定是否退役到 `rollout_summaries/.retired/`（可恢复，不直接删除）。
 - 📥 **摘要常驻注入**：`memory_summary.md` 内容（有硬上限保护）随 system prompt 注入
   每次会话，模型无需任何操作就能看到导航索引。
 - 🔍 **四个记忆工具**：`memory_list` / `memory_read` / `memory_search` /
@@ -36,7 +42,11 @@
   输入与输出两侧脱敏；记忆路径越界一律拒绝。
 - 🔁 **可靠调度**：每个会话一个租约（KV 持久化），重启不重复处理、不重复整合；
   失败带退避重试；孤儿租约自动回收。
-- ⚙️ **设置页**：设置 → 长期记忆 中查看统计、手动触发提取/整合、调整冷却与模型路由。
+- 📊 **运行记录**：每次提取/整合运行（含模型完整产出）持久化到 `logs/`，设置页可
+  展开查看"AI 到底干了啥"，并可浏览记忆库任一文件原文。
+- ⚙️ **设置页**：设置 → 长期记忆 中查看统计、手动触发提取/整合、查看运行记录、
+  浏览记忆库、调整冷却/遗忘阈值/模型路由；管道运行中按钮保持禁用（关闭页面再
+  打开也不会误以为已解锁）。
 
 ## 工作原理
 
@@ -131,9 +141,10 @@ https://github.com/yan5236/dsh-memory
 | `phase1MaxTokens` | `4096` | 单次提取输出上限 |
 | `consolidationCooldownMs` | `21600000` | 整合冷却（失败后约 15 分钟自动重试，不受冷却限制） |
 | `maxRawChars` | `120000` | 单次整合的原始记忆输入上限 |
-| `phase2MaxTokens` | `12000` | 单次整合输出上限 |
+| `phase2MaxTokens` | `32768` | 单次整合输出上限（全量重写 MEMORY.md 时容易截断，可调至 65536+；上限 131072） |
 | `maxSummaryChars` | `8000` | 注入摘要的字符上限 |
 | `retryLimit` | `3` | 提取失败重试次数 |
+| `maxUnusedDays` | `30` | 遗忘阈值：超过该天数未被查阅的回顾成为候选遗忘（0 = 关闭） |
 
 ## 记忆目录结构
 
@@ -144,7 +155,9 @@ https://github.com/yan5236/dsh-memory
 ├── raw_memories.md            # Phase 1 产出，等待整合
 ├── raw_memories.archive.md    # 已整合原始记忆的历史归档
 ├── rollout_summaries/         # 每次会话的回顾（证据层）
-├── skills/                    # 整合沉淀出的可复用流程
+│   └── .retired/              # 被遗忘机制退役的回顾（可恢复）
+├── skills/                    # 整合沉淀出的可复用流程（SKILL.md + 附属文件）
+├── logs/                      # 运行记录（每次提取/整合的完整产出，最多保留 50 份）
 └── extensions/ad_hoc/notes/   # memory_add 写入的用户要求笔记
 ```
 

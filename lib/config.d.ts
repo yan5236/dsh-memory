@@ -30,19 +30,30 @@ export interface Config {
     consolidationCooldownMs: number;
     /** Hard cap on raw memories fed into one consolidation call. */
     maxRawChars: number;
-    /** Output token cap for one Phase 2 consolidation call. */
+    /**
+     * Output token cap for one Phase 2 consolidation call. Defaults high
+     * because the model rewrites MEMORY.md in full and reasoning models burn
+     * budget inside this cap; raise it when consolidation keeps truncating.
+     */
     phase2MaxTokens: number;
     /** Hard cap on the memory summary injected into the system prompt. */
     maxSummaryChars: number;
     /** Extraction attempts before a session is permanently failed. */
     retryLimit: number;
+    /**
+     * Forgetting threshold: rollout summaries whose last use (or creation, when
+     * never used) is older than this many days become forgetting candidates in
+     * Phase 2; the model may retire them into `rollout_summaries/.retired/`.
+     * 0 disables the forgetting mechanism. Default 30 aligns with Codex.
+     */
+    maxUnusedDays: number;
 }
 export declare const DEFAULTS: Config;
 export declare const Config: z<Config>;
 /** Merge composition base and runtime overrides over schema defaults. */
 export declare function resolveConfig(base?: Partial<Config>, overrides?: Partial<Config>): Config;
 /** Whitelisted keys the settings page may override, with safe range clamps. */
-export declare const OVERRIDABLE_KEYS: readonly ["enabled", "provider", "model", "idleDebounceMs", "maxRolloutsPerRun", "extractionConcurrency", "minSessionEvents", "maxRolloutAgeDays", "maxTranscriptChars", "phase1MaxTokens", "consolidationCooldownMs", "maxRawChars", "phase2MaxTokens", "maxSummaryChars", "retryLimit"];
+export declare const OVERRIDABLE_KEYS: readonly ["enabled", "provider", "model", "idleDebounceMs", "maxRolloutsPerRun", "extractionConcurrency", "minSessionEvents", "maxRolloutAgeDays", "maxTranscriptChars", "phase1MaxTokens", "consolidationCooldownMs", "maxRawChars", "phase2MaxTokens", "maxSummaryChars", "retryLimit", "maxUnusedDays"];
 export type OverridableKey = (typeof OVERRIDABLE_KEYS)[number];
 /** Validate and clamp one settings-page override patch. */
 export declare function clampOverrides(patch: Record<string, unknown>): Partial<Config>;

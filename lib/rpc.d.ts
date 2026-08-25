@@ -79,6 +79,8 @@ export interface StatePayload {
         rollouts: number;
         skills: number;
         notes: number;
+        retired: number;
+        logCount: number;
     };
     pipeline: {
         pendingConsolidation: boolean;
@@ -86,6 +88,9 @@ export interface StatePayload {
         lastPhase2At: number;
         phase2Error?: string;
         cooldownRemainingMs: number;
+        runningPhase1: boolean;
+        runningPhase2: boolean;
+        phase2Failures: number;
     };
 }
 /** Register the `/dsh-memory/rpc` route; returns the route disposer. */

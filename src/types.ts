@@ -19,7 +19,19 @@ export interface SessionClaim {
   parts?: number
 }
 
-/** Durable plugin state persisted through the storage hub KV backend. */
+/** Read-path usage recorded for one memory file (Codex usage_count/last_usage parity). */
+export interface UsageRecord {
+  count: number
+  lastAt: number
+}
+
+/**
+ * Durable plugin state persisted through the storage hub KV backend.
+ *
+ * `usage` and `retiredAt` are optional at load time so archives written by
+ * older plugin versions keep loading (v stays 1; missing fields default to
+ * empty maps).
+ */
 export interface MemoryState {
   v: 1
   processed: Record<string, SessionClaim>
@@ -28,6 +40,12 @@ export interface MemoryState {
   phase2Error?: string
   pendingConsolidation: boolean
   overrides: Partial<Config>
+  /** Per-file read-path usage: relative memory path → usage record. */
+  usage?: Record<string, UsageRecord>
+  /** Retired rollout summary slug → epoch ms when it was retired. */
+  retiredAt?: Record<string, number>
+  /** Consecutive Phase 2 failures; pauses automatic retries at the cap. */
+  phase2Failures?: number
 }
 
 /** Minimal structural view of a DSH session header. */
@@ -57,4 +75,31 @@ export interface FileEntry {
   kind: 'file' | 'dir'
   size: number
   modifiedAt: number
+}
+
+/**
+ * One pipeline run persisted under `logs/<stamp>-<stage>.json`.
+ *
+ * `detail` carries stage-specific payloads (per-session extraction results,
+ * the full Phase 2 model output); listRunLogs returns only the summary
+ * fields, the settings page reads the full file through read-file.
+ */
+export interface RunLogEntry {
+  at: number
+  stage: 'phase1' | 'phase2'
+  /** `provider/model` route actually used. */
+  route?: string
+  /** Short human-readable outcome, e.g. "done 2/3" or "skipped:no-route". */
+  outcome: string
+  detail: Record<string, unknown>
+}
+
+/** Summary view of one run log, as returned by listRunLogs. */
+export interface RunLogSummary {
+  name: string
+  at: number
+  stage: 'phase1' | 'phase2'
+  route?: string
+  outcome: string
+  size: number
 }

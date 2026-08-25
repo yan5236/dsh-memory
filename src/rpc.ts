@@ -79,6 +79,8 @@ export interface StatePayload {
     rollouts: number
     skills: number
     notes: number
+    retired: number
+    logCount: number
   }
   pipeline: {
     pendingConsolidation: boolean
@@ -86,6 +88,9 @@ export interface StatePayload {
     lastPhase2At: number
     phase2Error?: string
     cooldownRemainingMs: number
+    runningPhase1: boolean
+    runningPhase2: boolean
+    phase2Failures: number
   }
 }
 
@@ -141,6 +146,9 @@ async function statePayload(deps: RpcDeps): Promise<StatePayload> {
       lastPhase2At: snapshot.lastPhase2At,
       ...(snapshot.phase2Error === undefined ? {} : { phase2Error: snapshot.phase2Error }),
       cooldownRemainingMs: Math.max(0, snapshot.lastPhase2At + cfg.consolidationCooldownMs - now),
+      runningPhase1: deps.phase1.isRunning,
+      runningPhase2: deps.phase2.isRunning,
+      phase2Failures: deps.state.phase2Failures,
     },
   }
 }
@@ -188,6 +196,9 @@ export function registerRpc(webServer: WebServerRuntime, deps: RpcDeps): () => v
           result = { state: await statePayload(deps) }
         } else if (method === 'list-files') {
           result = { files: await deps.files.listTree(typeof args.path === 'string' ? args.path : '') }
+        } else if (method === 'get-logs') {
+          const limit = typeof args.limit === 'number' ? Math.max(1, Math.min(50, Math.floor(args.limit))) : 20
+          result = { logs: await deps.files.listRunLogs(limit) }
         } else if (method === 'read-file') {
           const path = typeof args.path === 'string' ? args.path : ''
           const content = await deps.files.readIfExists(path, 300_000)

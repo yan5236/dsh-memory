@@ -24,6 +24,22 @@ interface FailureEntry {
   at: number
 }
 
+interface RunLogSummary {
+  name: string
+  at: number
+  stage: string
+  route?: string
+  outcome: string
+  size: number
+}
+
+interface FileEntryLite {
+  path: string
+  kind: 'file' | 'dir'
+  size: number
+  modifiedAt: number
+}
+
 interface StatePayload {
   enabled: boolean
   root: string
@@ -34,13 +50,16 @@ interface StatePayload {
   models: ModelEntry[]
   counts: { done: number; noop: number; failed: number; running: number; total: number }
   recentFailures: FailureEntry[]
-  stats: { summaryChars: number; memoryChars: number; rawChars: number; rollouts: number; skills: number; notes: number }
+  stats: { summaryChars: number; memoryChars: number; rawChars: number; rollouts: number; skills: number; notes: number; retired: number; logCount: number }
   pipeline: {
     pendingConsolidation: boolean
     lastPhase1At: number
     lastPhase2At: number
     phase2Error?: string
     cooldownRemainingMs: number
+    runningPhase1: boolean
+    runningPhase2: boolean
+    phase2Failures: number
   }
   config: Record<string, unknown>
 }
@@ -75,6 +94,9 @@ const CSS = [
   '.dm-btn.secondary:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}',
   '.dm-btn:disabled{opacity:.5;cursor:default}',
   '.dm-fail{border-left:2px solid var(--dsw-alias-state-warn-primary);flex-direction:column;gap:2px;padding-left:10px;display:flex}',
+  '.dm-logline{border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:6px 10px;gap:6px;flex-direction:column;display:flex}',
+  '.dm-pre{box-sizing:border-box;max-height:320px;overflow:auto;margin:0;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:8px 10px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary);white-space:pre-wrap;word-break:break-all;background:var(--dsw-alias-bg-layer-1)}',
+  '.dm-tree{max-height:220px;overflow-y:auto;flex-direction:column;gap:2px;display:flex}',
 ].join('')
 
 const rpc = async (method: string, args: Record<string, unknown> = {}): Promise<Record<string, unknown>> => {
@@ -107,6 +129,10 @@ function MemorySettings(): React.ReactNode {
   const [form, setForm] = React.useState<Record<string, unknown> | null>(null)
   const [busy, setBusy] = React.useState(false)
   const [notice, setNotice] = React.useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
+  const [logs, setLogs] = React.useState<RunLogSummary[] | null>(null)
+  const [logDetail, setLogDetail] = React.useState<{ name: string; content: string } | null>(null)
+  const [tree, setTree] = React.useState<FileEntryLite[] | null>(null)
+  const [fileDetail, setFileDetail] = React.useState<{ path: string; content: string } | null>(null)
 
   const applyState = (state: StatePayload): void => {
     setPayload(state)
@@ -120,6 +146,7 @@ function MemorySettings(): React.ReactNode {
       provider: String(cfg.provider ?? ''),
       model: String(cfg.model ?? ''),
       phase2MaxTokens: Number(cfg.phase2MaxTokens ?? 12000),
+      maxUnusedDays: Number(cfg.maxUnusedDays ?? 30),
       manualModel: prev?.manualModel === true,
     }))
   }
@@ -142,6 +169,57 @@ function MemorySettings(): React.ReactNode {
       alive = false
     }
   }, [])
+
+  // While the backend pipeline is running (single-flight), keep the page
+  // truthfully disabled and refresh automatically so a reopened settings page
+  // reflects the in-flight run instead of showing unlocked buttons.
+  const pipelineRunning = payload !== null
+    && (payload.pipeline.runningPhase1 === true || payload.pipeline.runningPhase2 === true)
+  React.useEffect(() => {
+    if (!pipelineRunning) return
+    const timer = setInterval(() => {
+      void refresh().catch(() => {})
+    }, 4_000)
+    return () => clearInterval(timer)
+  }, [pipelineRunning, refresh])
+
+  const loadLogs = async (): Promise<void> => {
+    try {
+      const result = await rpc('get-logs', { limit: 20 })
+      setLogs((result.logs ?? []) as RunLogSummary[])
+    } catch {
+      setLogs([])
+    }
+  }
+
+  const openLog = async (entry: RunLogSummary): Promise<void> => {
+    try {
+      const result = await rpc('read-file', { path: `logs/${entry.name}` })
+      const content = (result.content as string | null) ?? '（读取失败）'
+      setLogDetail({ name: entry.name, content })
+    } catch (error) {
+      setLogDetail({ name: entry.name, content: `读取失败：${error instanceof Error ? error.message : String(error)}` })
+    }
+  }
+
+  const loadTree = async (): Promise<void> => {
+    try {
+      const result = await rpc('list-files', { path: '' })
+      setTree((result.files ?? []) as FileEntryLite[])
+    } catch {
+      setTree([])
+    }
+  }
+
+  const openFile = async (path: string): Promise<void> => {
+    try {
+      const result = await rpc('read-file', { path })
+      const content = (result.content as string | null) ?? '（读取失败）'
+      setFileDetail({ path, content })
+    } catch (error) {
+      setFileDetail({ path, content: `读取失败：${error instanceof Error ? error.message : String(error)}` })
+    }
+  }
 
   if (payload === null || form === null) {
     return el('div', { className: 'dm-section' },
@@ -200,12 +278,18 @@ function MemorySettings(): React.ReactNode {
         text = `本轮处理 ${selected} 个会话：${done} 新提取、${noop} 跳过、${unchanged} 无新增内容、${failed} 失败。`
       }
       if (phase2 !== null && phase2 !== undefined) {
+        const reasonText: Record<string, string> = {
+          cooldown: '冷却中',
+          'no-input': '没有待整合的新记忆',
+          'no-route': '没有可用的模型路由',
+          'retry-paused': '连续失败已暂停自动重试（请用「立即整合」手动重试）',
+        }
         text += phase2.kind === 'consolidated'
           ? ` 随后整合已执行（${phase2.mode === 'init' ? '初次创建' : '增量合并'}）。`
           : phase2.kind === 'error'
-            ? ' 随后整合失败（15 分钟内自动重试）。'
+            ? ' 随后整合失败（自动重试，连续 3 次失败后暂停）。'
             : phase2.kind === 'skipped'
-              ? ` 随后整合未执行（${phase2.reason}）。`
+              ? ` 随后整合未执行（${reasonText[phase2.reason ?? ''] ?? phase2.reason}）。`
               : ''
       }
       setNotice({ kind: 'ok', text })
@@ -226,6 +310,7 @@ function MemorySettings(): React.ReactNode {
       provider: String(form.provider ?? ''),
       model: String(form.model ?? ''),
       phase2MaxTokens: Number(form.phase2MaxTokens ?? 12000),
+      maxUnusedDays: Number(form.maxUnusedDays ?? 30),
     }, '配置已保存，并持久化到 DSH 存储。')
   }
 
@@ -246,6 +331,9 @@ function MemorySettings(): React.ReactNode {
   const knownProviders = Array.isArray(payload.providers) ? payload.providers : []
   const knownModels = Array.isArray(payload.models) ? payload.models : []
   const providerKnown = provider === '' || knownProviders.some(entry => entry.id === provider)
+  // Buttons stay disabled while the backend pipeline is in flight, so closing
+  // and reopening the page no longer "unlocks" a run that is still running.
+  const controlsDisabled = busy || pipelineRunning
 
   const providerSelect = el('select', {
     className: 'dm-input', value: providerKnown ? provider : '__custom__', disabled: busy,
@@ -276,6 +364,45 @@ function MemorySettings(): React.ReactNode {
       el('p', { className: 'dm-dimmed' }, `${shortId(failure.session)} · ${fmtTime(failure.at)}`),
       el('p', { className: 'dm-warn' }, failure.error || '未知错误')))
 
+  const logLines = (logs ?? []).map(entry =>
+    el('div', { className: 'dm-logline', key: entry.name },
+      el('div', { className: 'dm-row' },
+        el('span', { className: 'dm-label' }, entry.stage === 'phase1' ? '提取' : '整合'),
+        el('span', { className: 'dm-dimmed' }, fmtTime(entry.at)),
+        el('span', { className: 'dm-dimmed' }, entry.route ?? ''),
+        el('span', { className: 'dm-dimmed' }, entry.outcome),
+        el('button', {
+          className: 'dm-btn secondary', disabled: busy,
+          onClick: () => {
+            if (logDetail?.name === entry.name) {
+              setLogDetail(null)
+            } else {
+              void openLog(entry)
+            }
+          },
+        }, logDetail?.name === entry.name ? '收起' : '查看 AI 干了啥'),
+      ),
+      logDetail?.name === entry.name
+        ? el('pre', { className: 'dm-pre' }, logDetail.content.slice(0, 60_000))
+        : null))
+
+  const treeRows = (tree ?? [])
+    .filter(entry => entry.kind === 'file')
+    .slice(0, 300)
+    .map(entry =>
+      el('button', {
+        key: entry.path,
+        className: 'dm-btn secondary',
+        style: { height: 26, borderRadius: 6, fontSize: 12, justifyContent: 'flex-start' },
+        onClick: () => {
+          if (fileDetail?.path === entry.path) {
+            setFileDetail(null)
+          } else {
+            void openFile(entry.path)
+          }
+        },
+      }, `${entry.path}  ${fmtChars(entry.size)}`))
+
   return el('div', { className: 'dm-section' },
     el('p', { className: 'dm-title' }, '长期记忆'),
     el('p', { className: 'dm-intro' },
@@ -289,6 +416,7 @@ function MemorySettings(): React.ReactNode {
         stat('会话回顾', `${payload.stats.rollouts} 份`),
         stat('固化的 skills', `${payload.stats.skills} 个`),
         stat('ad hoc 笔记', `${payload.stats.notes} 条`),
+        stat('已退役回顾', `${payload.stats.retired} 份`),
         stat('MEMORY.md', fmtChars(payload.stats.memoryChars)),
         stat('memory_summary.md', fmtChars(payload.stats.summaryChars)),
         stat('待整合 raw', fmtChars(payload.stats.rawChars)),
@@ -298,13 +426,20 @@ function MemorySettings(): React.ReactNode {
       pipeline.phase2Error === undefined
         ? null
         : el('p', { className: 'dm-warn' }, `上次整合失败：${pipeline.phase2Error}`),
+      pipeline.phase2Failures > 0 && pipeline.phase2Error !== undefined
+        ? el('p', { className: 'dm-warn' },
+          `已连续失败 ${pipeline.phase2Failures} 次：自动重试${pipeline.phase2Failures >= 3 ? '已暂停' : '仍会进行'}；失败详情可在下方「运行记录」中展开查看模型实际输出。`)
+        : null,
+      pipelineRunning
+        ? el('p', { className: 'dm-warn' }, '管道正在运行中（提取/整合尚未结束）——按钮保持禁用直到运行完成，页面会自动刷新。')
+        : null,
       el('div', { className: 'dm-row' },
-        el('button', { className: 'dm-btn primary', disabled: busy, onClick: () => { void runPhase1() } }, '立即提取'),
-        el('button', { className: 'dm-btn primary', disabled: busy, onClick: () => { void call('run-phase2', {}, '整合完成。') } }, '立即整合'),
+        el('button', { className: 'dm-btn primary', disabled: controlsDisabled, onClick: () => { void runPhase1() } }, '立即提取'),
+        el('button', { className: 'dm-btn primary', disabled: controlsDisabled, onClick: () => { void call('run-phase2', {}, '整合完成。') } }, '立即整合'),
         payload.counts.failed > 0
-          ? el('button', { className: 'dm-btn secondary', disabled: busy, onClick: () => { void call('reset-failures', {}, '失败会话已重新入队并触发重试。') } }, `重试失败会话（${payload.counts.failed}）`)
+          ? el('button', { className: 'dm-btn secondary', disabled: controlsDisabled, onClick: () => { void call('reset-failures', {}, '失败会话已重新入队并触发重试。') } }, `重试失败会话（${payload.counts.failed}）`)
           : null,
-        el('button', { className: 'dm-btn secondary', disabled: busy, onClick: () => { void call('get-state').then(() => setNotice({ kind: 'ok', text: '已刷新。' })).catch(() => {}) } }, '刷新'),
+        el('button', { className: 'dm-btn secondary', disabled: controlsDisabled, onClick: () => { void call('get-state').then(() => setNotice({ kind: 'ok', text: '已刷新。' })).catch(() => {}) } }, '刷新'),
         el('span', { className: 'dm-dimmed' }, `当前路由：${routeLabel}`)),
     ),
     failureLines.length > 0
@@ -312,6 +447,26 @@ function MemorySettings(): React.ReactNode {
         el('div', { className: 'dm-label' }, '最近失败的会话（按退避自动重试；错误含实际使用的模型路由）'),
         ...failureLines)
       : null,
+    el('div', { className: 'dm-card' },
+      el('div', { className: 'dm-row' },
+        el('span', { className: 'dm-label' }, '运行记录（最近 20 次管道活动；展开可查看每次运行中 AI 的完整产出）'),
+        el('button', { className: 'dm-btn secondary', disabled: busy, onClick: () => { void loadLogs() } }, '加载')),
+      logs === null
+        ? el('p', { className: 'dm-dimmed' }, '点击「加载」查看运行记录。')
+        : logs.length === 0
+          ? el('p', { className: 'dm-dimmed' }, '暂无运行记录（插件运行后会持久化到记忆库 logs/ 目录）。')
+          : el('div', { style: { flexDirection: 'column', gap: 8, display: 'flex' } }, ...logLines)),
+    el('div', { className: 'dm-card' },
+      el('div', { className: 'dm-row' },
+        el('span', { className: 'dm-label' }, '浏览记忆库（文件树；点击文件查看原文）'),
+        el('button', { className: 'dm-btn secondary', disabled: busy, onClick: () => { void loadTree() } }, '加载')),
+      el('div', { className: 'dm-tree' },
+        tree === null
+          ? el('p', { className: 'dm-dimmed' }, '点击「加载」列出记忆库文件。')
+          : tree.length === 0
+            ? el('p', { className: 'dm-dimmed' }, '（空）')
+            : el('div', { style: { flexDirection: 'column', gap: 2, display: 'flex' } }, ...treeRows)),
+      fileDetail === null ? null : el('pre', { className: 'dm-pre' }, fileDetail.content.slice(0, 100_000))),
     el('div', { className: 'dm-card' },
       el('label', { className: 'dm-check' },
         el('input', {
@@ -324,7 +479,8 @@ function MemorySettings(): React.ReactNode {
         num('整合冷却（小时）', 'cooldownHours', '两次自动整合的最小间隔，默认 6 小时'),
         num('每轮处理会话数', 'maxRolloutsPerRun', '每次管道运行提取的会话数上限'),
         num('注入摘要上限（字符）', 'maxSummaryChars', 'memory_summary.md 注入 system prompt 的截断上限'),
-        num('整合输出 token 上限', 'phase2MaxTokens')),
+        num('整合输出 token 上限', 'phase2MaxTokens', '整合需全量重写 MEMORY.md，输出大时容易截断；当前上限可调至 131072，建议 65536'),
+        num('遗忘阈值（天）', 'maxUnusedDays', '超过该天数未被查阅的回顾会被标注为候选遗忘，可在整合时退役到 .retired/；0 = 关闭遗忘机制，默认 30 天')),
       el('div', { className: 'dm-grid' },
         el('div', { className: 'dm-field' },
           el('div', { className: 'dm-label' }, '记忆管道模型提供方（可选）'),
@@ -342,14 +498,16 @@ function MemorySettings(): React.ReactNode {
               el('span', { className: 'dm-dimmed' }, '手动输入模型 ID'))
             : el('p', { className: 'dm-dimmed' }, '选择提供方后可下拉选择模型'))),
       el('div', { className: 'dm-row' },
-        el('button', { className: 'dm-btn primary', disabled: busy, onClick: save }, '保存配置')),
+        el('button', { className: 'dm-btn primary', disabled: controlsDisabled, onClick: save }, '保存配置')),
     ),
     notice === null ? null : el('p', { className: notice.kind === 'ok' ? 'dm-ok' : 'dm-error' }, notice.text),
     payload.storage === 'ok'
       ? el('p', { className: 'dm-dimmed' }, '配置与处理进度已持久化到 DSH 存储（storage: json），重启后自动恢复。')
       : el('p', { className: 'dm-warn' }, `持久化不可用（${payload.storageError || 'storage json 后端缺失'}）：进度与配置仅在本次运行期间有效。`),
     el('p', { className: 'dm-dimmed' },
-      '会话内用法：助手可调用 memory_list / memory_read / memory_search / memory_add（仅在用户明确要求时）工具查阅与更新记忆。'),
+      '会话内用法：助手可调用 memory_list / memory_read / memory_search / memory_add（仅在用户明确要求时）工具查阅与更新记忆；工具查阅行为会作为使用记录，供遗忘机制判断哪些回顾已失效。'),
+    el('p', { className: 'dm-dimmed' },
+      '固化技能存放于记忆库 skills/ 目录；若要被 DSH 会话加载，需在 agent 预设的 customSkillDirs 中引用该目录（本插件不修改预设）。'),
   )
 }
 
