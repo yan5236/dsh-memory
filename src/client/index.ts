@@ -97,6 +97,30 @@ const CSS = [
   '.dm-logline{border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:6px 10px;gap:6px;flex-direction:column;display:flex}',
   '.dm-pre{box-sizing:border-box;max-height:320px;overflow:auto;margin:0;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:8px 10px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary);white-space:pre-wrap;word-break:break-all;background:var(--dsw-alias-bg-layer-1)}',
   '.dm-tree{max-height:220px;overflow-y:auto;flex-direction:column;gap:2px;display:flex}',
+  '.dm-overlay{position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;padding:24px}',
+  '.dm-modal{box-sizing:border-box;width:min(960px,100%);height:min(720px,100%);background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l2);border-radius:14px;display:flex;flex-direction:column;overflow:hidden}',
+  '.dm-modal-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-bottom:1px solid var(--dsw-alias-border-l1)}',
+  '.dm-modal-title{color:var(--dsw-alias-label-primary);margin:0;font-size:15px;font-weight:500;line-height:22px}',
+  '.dm-modal-close{cursor:pointer;border:none;background:transparent;color:var(--dsw-alias-label-tertiary);font-size:20px;line-height:20px;padding:4px 8px;border-radius:8px}',
+  '.dm-modal-close:hover{background:var(--dsw-alias-interactive-bg-hover)}',
+  '.dm-warnbar{border:1px solid var(--dsw-alias-state-warn-primary);background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 10%,transparent);color:var(--dsw-alias-state-warn-label);border-radius:10px;padding:8px 12px;font-size:12px;line-height:18px;margin:12px 16px 0}',
+  '.dm-modal-body{flex:1;display:flex;min-height:0}',
+  '.dm-filecol{width:320px;min-width:220px;border-right:1px solid var(--dsw-alias-border-l1);overflow-y:auto;padding:6px;display:flex;flex-direction:column;gap:1px}',
+  '.dm-fileitem{border:none;background:transparent;color:var(--dsw-alias-label-primary);text-align:left;font-size:12px;line-height:18px;padding:4px 6px;border-radius:6px;cursor:pointer;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;box-sizing:border-box;width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+  '.dm-fileitem:hover{background:var(--dsw-alias-interactive-bg-hover)}',
+  '.dm-fileitem.sel{background:var(--dsw-alias-interactive-bg-hover);font-weight:600}',
+  '.dm-dirrow{display:flex;flex-direction:column;gap:1px}',
+  '.dm-dirlabel{display:flex;align-items:center;gap:6px;width:100%;box-sizing:border-box;border:none;background:transparent;color:var(--dsw-alias-label-primary);font-size:12px;line-height:18px;padding:4px 6px;border-radius:6px;cursor:pointer;text-align:left;white-space:nowrap}',
+  '.dm-dirlabel:hover{background:var(--dsw-alias-interactive-bg-hover)}',
+  '.dm-caret{color:var(--dsw-alias-label-tertiary);width:12px;flex:none;display:inline-block;font-size:9px;line-height:18px}',
+  '.dm-filecount{color:var(--dsw-alias-label-tertiary);font-size:11px;flex:none}',
+  '.dm-editcol{flex:1;display:flex;flex-direction:column;min-width:0}',
+  '.dm-editor{box-sizing:border-box;flex:1;min-height:0;margin:12px 16px 0;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-2,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-label-primary);font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px;line-height:18px;padding:10px;resize:none;white-space:pre}',
+  '.dm-editor:focus{border-color:var(--dsw-alias-brand-primary);outline:none}',
+  '.dm-editfoot{display:flex;align-items:center;gap:10px;padding:12px 16px;flex-wrap:wrap}',
+  '.dm-btn.danger{border:1px solid var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary);background:transparent}',
+  '.dm-btn.danger:hover:not(:disabled){background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 12%,transparent)}',
+  '.dm-btn.armed{border:1px solid var(--dsw-alias-state-error-primary);color:var(--dsw-alias-label-primary-foreground);background:var(--dsw-alias-state-error-primary)}',
 ].join('')
 
 const rpc = async (method: string, args: Record<string, unknown> = {}): Promise<Record<string, unknown>> => {
@@ -123,6 +147,64 @@ function shortId(id: string): string {
   return id.length > 16 ? `${id.slice(0, 13)}…` : id
 }
 
+/** 系统自动生成/维护的核心文件：管道每次整合都会全量重写，手工改动风险最高。 */
+const CORE_FILES = ['MEMORY.md', 'memory_summary.md', 'raw_memories.md', 'raw_memories.archive.md']
+
+interface FileTreeLite {
+  name: string
+  path: string
+  kind: 'file' | 'dir'
+  size: number
+  children?: FileTreeLite[]
+}
+
+/** 把扁平文件清单（list-files 返回）组织成层级树，目录在前、字母序。 */
+function buildTree(entries: FileEntryLite[]): FileTreeLite[] {
+  const root: FileTreeLite[] = []
+  const insert = (path: string, kind: 'file' | 'dir', size: number): void => {
+    const parts = path.split('/')
+    let level = root
+    for (let index = 0; index < parts.length; index += 1) {
+      const part = parts[index] ?? ''
+      const full = parts.slice(0, index + 1).join('/')
+      const last = index === parts.length - 1
+      let node = level.find(item => item.path === full)
+      if (node === undefined) {
+        node = { name: part, path: full, kind: last ? kind : 'dir', size: last ? size : 0 }
+        if (!last) node.children = []
+        level.push(node)
+      }
+      if (!last) {
+        if (node.children === undefined) node.children = []
+        level = node.children
+      }
+    }
+  }
+  for (const dir of entries.filter(entry => entry.kind === 'dir')) insert(dir.path, 'dir', dir.size)
+  for (const file of entries.filter(entry => entry.kind === 'file')) insert(file.path, 'file', file.size)
+  const sortLevel = (list: FileTreeLite[]): void => {
+    list.sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === 'dir' ? -1 : 1))
+    for (const node of list) if (node.children !== undefined) sortLevel(node.children)
+  }
+  sortLevel(root)
+  return root
+}
+
+/** 默认展开顶层目录（收纳更深层，让根文件 + 一级文件夹立即可见）。 */
+function defaultExpanded(tree: FileTreeLite[]): Record<string, boolean> {
+  const map: Record<string, boolean> = {}
+  const visit = (nodes: FileTreeLite[], depth: number): void => {
+    for (const node of nodes) {
+      if (node.kind === 'dir' && node.children !== undefined && node.children.length > 0) {
+        if (depth === 0) map[node.path] = true
+        visit(node.children, depth + 1)
+      }
+    }
+  }
+  visit(tree, 0)
+  return map
+}
+
 function MemorySettings(): React.ReactNode {
   const el = React.createElement
   const [payload, setPayload] = React.useState<StatePayload | null>(null)
@@ -132,7 +214,13 @@ function MemorySettings(): React.ReactNode {
   const [logs, setLogs] = React.useState<RunLogSummary[] | null>(null)
   const [logDetail, setLogDetail] = React.useState<{ name: string; content: string } | null>(null)
   const [tree, setTree] = React.useState<FileEntryLite[] | null>(null)
-  const [fileDetail, setFileDetail] = React.useState<{ path: string; content: string } | null>(null)
+  const [expanded, setExpanded] = React.useState<Record<string, boolean>>({})
+  const [editorOpen, setEditorOpen] = React.useState(false)
+  const [selectedPath, setSelectedPath] = React.useState<string | null>(null)
+  const [draft, setDraft] = React.useState('')
+  const [deleteArmed, setDeleteArmed] = React.useState(false)
+  const [editorBusy, setEditorBusy] = React.useState(false)
+  const [editorNotice, setEditorNotice] = React.useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
 
   const applyState = (state: StatePayload): void => {
     setPayload(state)
@@ -205,19 +293,117 @@ function MemorySettings(): React.ReactNode {
   const loadTree = async (): Promise<void> => {
     try {
       const result = await rpc('list-files', { path: '' })
-      setTree((result.files ?? []) as FileEntryLite[])
+      const list = (result.files ?? []) as FileEntryLite[]
+      setTree(list)
+      // 首次加载时才初始化默认展开，之后保留用户的折叠/展开选择。
+      setExpanded(prev => (Object.keys(prev).length === 0 && list.length > 0 ? defaultExpanded(buildTree(list)) : prev))
     } catch {
       setTree([])
     }
   }
 
-  const openFile = async (path: string): Promise<void> => {
+  const toggleDir = (path: string): void => {
+    setExpanded(prev => ({ ...prev, [path]: !(prev[path] === true) }))
+  }
+
+  /** VS Code 风格递归渲染文件树：目录可折叠，文件缩进显示。 */
+  const renderTree = (nodes: FileTreeLite[], depth: number): React.ReactNode[] => nodes.map(node => {
+    const indent = { paddingLeft: 8 + depth * 16 }
+    if (node.kind === 'dir') {
+      const open = expanded[node.path] === true
+      return el('div', { key: node.path, className: 'dm-dirrow' },
+        el('button', {
+          className: 'dm-dirlabel', style: indent, title: node.path,
+          onClick: () => toggleDir(node.path),
+        },
+          el('span', { className: 'dm-caret' }, open ? '▾' : '▸'),
+          el('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis' } }, node.name),
+          el('span', { style: { flex: 1 } }),
+          el('span', { className: 'dm-filecount' }, String(node.children?.length ?? 0))),
+        open && node.children !== undefined
+          ? el('div', { style: { flexDirection: 'column', display: 'flex' } }, ...renderTree(node.children, depth + 1))
+          : null)
+    }
+    return el('button', {
+      key: node.path,
+      className: `dm-fileitem${selectedPath === node.path ? ' sel' : ''}`,
+      style: indent,
+      disabled: editorBusy,
+      onClick: () => { void selectFile(node.path) },
+    }, node.name)
+  })
+
+  /** 打开记忆库弹窗：Top 的位置由按钮触发，打开时自动列出一份文件树。 */
+  const openEditor = async (): Promise<void> => {
+    setEditorOpen(true)
+    setEditorNotice(null)
+    setSelectedPath(null)
+    setDraft('')
+    setDeleteArmed(false)
+    await loadTree()
+  }
+
+  const closeEditor = (): void => {
+    setEditorOpen(false)
+    setTree(null)
+    setSelectedPath(null)
+    setDraft('')
+    setDeleteArmed(false)
+    setEditorNotice(null)
+  }
+
+  const selectFile = async (path: string): Promise<void> => {
+    setSelectedPath(path)
+    setDeleteArmed(false)
+    setEditorNotice(null)
     try {
       const result = await rpc('read-file', { path })
-      const content = (result.content as string | null) ?? '（读取失败）'
-      setFileDetail({ path, content })
+      setDraft((result.content as string | null) ?? '')
     } catch (error) {
-      setFileDetail({ path, content: `读取失败：${error instanceof Error ? error.message : String(error)}` })
+      setEditorNotice({ kind: 'err', text: `读取失败：${error instanceof Error ? error.message : String(error)}` })
+      setDraft('')
+    }
+  }
+
+  const saveDraft = async (): Promise<void> => {
+    if (selectedPath === null) return
+    setEditorBusy(true)
+    setEditorNotice(null)
+    try {
+      const result = await rpc('write-file', { path: selectedPath, content: draft })
+      if (result.ok !== true) throw new Error(String(result.message ?? '保存失败'))
+      setDeleteArmed(false)
+      setEditorNotice({ kind: 'ok', text: `已保存 ${selectedPath}` })
+      await loadTree()
+    } catch (error) {
+      setEditorNotice({ kind: 'err', text: `保存失败：${error instanceof Error ? error.message : String(error)}` })
+    } finally {
+      setEditorBusy(false)
+    }
+  }
+
+  const deleteSelected = async (): Promise<void> => {
+    if (selectedPath === null) return
+    if (!deleteArmed) {
+      setDeleteArmed(true)
+      return
+    }
+    setEditorBusy(true)
+    setEditorNotice(null)
+    try {
+      const result = await rpc('delete-file', { path: selectedPath })
+      if (result.ok !== true) throw new Error(String(result.message ?? '删除失败'))
+      const removedPath = selectedPath
+      setSelectedPath(null)
+      setDraft('')
+      setDeleteArmed(false)
+      setEditorNotice({ kind: 'ok', text: `已删除 ${removedPath}` })
+      await loadTree()
+    } catch (error) {
+      setEditorNotice({ kind: 'err', text: `删除失败：${error instanceof Error ? error.message : String(error)}` })
+      setDeleteArmed(false)
+    } finally {
+      setEditorBusy(false)
     }
   }
 
@@ -386,22 +572,55 @@ function MemorySettings(): React.ReactNode {
         ? el('pre', { className: 'dm-pre' }, logDetail.content.slice(0, 60_000))
         : null))
 
-  const treeRows = (tree ?? [])
-    .filter(entry => entry.kind === 'file')
-    .slice(0, 300)
-    .map(entry =>
-      el('button', {
-        key: entry.path,
-        className: 'dm-btn secondary',
-        style: { height: 26, borderRadius: 6, fontSize: 12, justifyContent: 'flex-start' },
-        onClick: () => {
-          if (fileDetail?.path === entry.path) {
-            setFileDetail(null)
-          } else {
-            void openFile(entry.path)
-          }
-        },
-      }, `${entry.path}  ${fmtChars(entry.size)}`))
+  const treeNodes = tree === null ? [] : buildTree(tree)
+
+  const guardNotice = selectedPath !== null && CORE_FILES.includes(selectedPath)
+    ? el('div', { style: { padding: '12px 16px 0' } },
+      el('p', { className: 'dm-warn' }, '这是系统自动生成/维护的核心记忆文件（每次管道整合都会全量重写），手工改动很可能被覆盖或破坏插件行为。除非你非常清楚要做什么，否则不要修改。'))
+    : null
+
+  const editorView = selectedPath === null
+    ? el('div', { className: 'dm-editcol' },
+      el('p', { className: 'dm-dimmed', style: { padding: '16px' } }, '在左侧选择一个记忆文件开始查看 / 编辑。'))
+    : el('div', { className: 'dm-editcol' },
+      el('textarea', {
+        className: 'dm-editor',
+        value: draft,
+        disabled: editorBusy,
+        spellCheck: false,
+        onChange: (event: { target: { value: string } }) => setDraft(event.target.value),
+      }),
+      guardNotice,
+      el('div', { className: 'dm-editfoot' },
+        el('span', { className: 'dm-label', style: { wordBreak: 'break-all' } }, selectedPath),
+        el('span', { style: { flex: 1 } }),
+        editorNotice === null
+          ? null
+          : el('p', { className: editorNotice.kind === 'ok' ? 'dm-ok' : 'dm-error', style: { margin: 0 } }, editorNotice.text),
+        el('button', {
+          className: `dm-btn ${deleteArmed ? 'armed' : 'danger'}`,
+          disabled: editorBusy,
+          onClick: () => { void deleteSelected() },
+        }, deleteArmed ? '再次点击确认删除' : '删除'),
+        el('button', { className: 'dm-btn primary', disabled: editorBusy, onClick: () => { void saveDraft() } }, '保存')))
+
+  const editorModal = editorOpen
+    ? el('div', { className: 'dm-overlay', onClick: closeEditor },
+      el('div', { className: 'dm-modal', onClick: event => event.stopPropagation() },
+        el('div', { className: 'dm-modal-head' },
+          el('p', { className: 'dm-modal-title' }, '记忆库文件'),
+          el('button', { className: 'dm-modal-close', onClick: closeEditor, title: '关闭', 'aria-label': '关闭' }, '✕')),
+        el('div', { className: 'dm-warnbar' },
+          '⚠ 记忆文件一般无需人工更改，除非你知道自己在做什么。修改后点「保存」，删除需二次确认；删除会直接从磁盘移除，不可恢复。'),
+        el('div', { className: 'dm-modal-body' },
+          el('div', { className: 'dm-filecol' },
+            tree === null
+              ? el('p', { className: 'dm-dimmed' }, '加载中…')
+              : tree.length === 0
+                ? el('p', { className: 'dm-dimmed' }, '（空）')
+                : el('div', { style: { flexDirection: 'column', gap: 1, display: 'flex' } }, ...renderTree(treeNodes, 0))),
+          editorView)))
+    : null
 
   return el('div', { className: 'dm-section' },
     el('p', { className: 'dm-title' }, '长期记忆'),
@@ -458,15 +677,11 @@ function MemorySettings(): React.ReactNode {
           : el('div', { style: { flexDirection: 'column', gap: 8, display: 'flex' } }, ...logLines)),
     el('div', { className: 'dm-card' },
       el('div', { className: 'dm-row' },
-        el('span', { className: 'dm-label' }, '浏览记忆库（文件树；点击文件查看原文）'),
-        el('button', { className: 'dm-btn secondary', disabled: busy, onClick: () => { void loadTree() } }, '加载')),
-      el('div', { className: 'dm-tree' },
-        tree === null
-          ? el('p', { className: 'dm-dimmed' }, '点击「加载」列出记忆库文件。')
-          : tree.length === 0
-            ? el('p', { className: 'dm-dimmed' }, '（空）')
-            : el('div', { style: { flexDirection: 'column', gap: 2, display: 'flex' } }, ...treeRows)),
-      fileDetail === null ? null : el('pre', { className: 'dm-pre' }, fileDetail.content.slice(0, 100_000))),
+        el('span', { className: 'dm-label' }, '记忆库管理'),
+        el('span', { style: { flex: 1 } }),
+        el('button', { className: 'dm-btn primary', disabled: busy, onClick: () => { void openEditor() } }, '打开记忆库')),
+      el('p', { className: 'dm-dimmed' },
+        '查看、编辑或删除记忆库文件（MEMORY.md、会话回顾、ad hoc 笔记等）。编辑记忆文件属于高级操作，正常交由管道的自动提取与整合即可。')),
     el('div', { className: 'dm-card' },
       el('label', { className: 'dm-check' },
         el('input', {
@@ -508,6 +723,7 @@ function MemorySettings(): React.ReactNode {
       '会话内用法：助手可调用 memory_list / memory_read / memory_search / memory_add（仅在用户明确要求时）工具查阅与更新记忆；工具查阅行为会作为使用记录，供遗忘机制判断哪些回顾已失效。'),
     el('p', { className: 'dm-dimmed' },
       '固化技能存放于记忆库 skills/ 目录；若要被 DSH 会话加载，需在 agent 预设的 customSkillDirs 中引用该目录（本插件不修改预设）。'),
+    editorModal,
   )
 }
 

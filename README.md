@@ -39,6 +39,10 @@ SQLite, no git baseline, no resident consolidation subagent.
 - 🔁 **Reliable scheduling**: one durable claim per session (KV-persisted); restarts never
   re-extract or double-consolidate; failures retry with backoff; orphaned claims recover.
 - ⚙️ **Settings page**: Settings → Long-term memory for stats, manual runs, and config.
+- 🗂️ **Memory manager**: the "Open memory bank" button opens a dedicated dialog with a
+  VS Code-style collapsible file tree (folders nest their contents), in-dialog editing,
+  and two-step deletion. A persistent warning reminds you: memory files generally need no
+  manual edits unless you know what you are doing.
 
 ## How it works
 

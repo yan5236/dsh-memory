@@ -203,6 +203,25 @@ export function registerRpc(webServer: WebServerRuntime, deps: RpcDeps): () => v
           const path = typeof args.path === 'string' ? args.path : ''
           const content = await deps.files.readIfExists(path, 300_000)
           result = { path, content: content ?? null }
+        } else if (method === 'write-file') {
+          const path = typeof args.path === 'string' ? args.path : ''
+          const content = typeof args.content === 'string' ? args.content : ''
+          if (path === '' || path.endsWith('/') || path.endsWith('\\')) {
+            result = { ok: false, message: 'write-file requires a non-empty file path' }
+          } else if (content.length > 5_000_000) {
+            result = { ok: false, message: 'write-file content is too large (max 5MB)' }
+          } else {
+            await deps.files.writeAtomic(path, content)
+            result = { ok: true, path }
+          }
+        } else if (method === 'delete-file') {
+          const path = typeof args.path === 'string' ? args.path : ''
+          if (path === '' || path.endsWith('/') || path.endsWith('\\')) {
+            result = { ok: false, message: 'delete-file requires a non-empty file path' }
+          } else {
+            const removed = await deps.files.removeFile(path)
+            result = { ok: removed, path }
+          }
         } else if (method === 'list-providers') {
           result = { providers: await listProviders(deps) }
         } else if (method === 'list-models') {

@@ -1,6 +1,6 @@
 {
   "name": "@nanmicoder/dsh-memory",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Long-term memory system for DeepSeek Harness: two-phase extraction/consolidation pipeline over session logs, with summary injection and memory tools",
   "keywords": [
     "deepseek",
@@ -35,7 +35,7 @@
     "clean": "node scripts/clean.mjs",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.client.json --noEmit",
     "build": "pnpm run clean && tsc && tsc -p tsconfig.client.json && tsdown",
-    "test": "vitest run",
+    "test": "vitest run --pool=threads",
     "verify": "pnpm run typecheck && pnpm run build && pnpm run test && node scripts/verify-package.mjs"
   },
   "dsh": {

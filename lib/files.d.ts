@@ -21,6 +21,8 @@ export declare class MemoryFiles {
     /** Resolve a memory-relative path; rejects anything escaping the root. */
     rel(relPath: string): string;
     readIfExists(relPath: string, cap?: number): Promise<string | undefined>;
+    /** Remove one memory file; resolves false when it does not exist. */
+    removeFile(relPath: string): Promise<boolean>;
     writeAtomic(relPath: string, content: string): Promise<void>;
     appendText(relPath: string, content: string): Promise<void>;
     /** Move raw_memories.md into the archive and reset it for the next batch. */

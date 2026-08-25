@@ -138,6 +138,24 @@ describe('MemoryFiles', () => {
     expect(await files.retireRolloutSummary('never-existed')).toBeUndefined()
   })
 
+  it('writes arbitrary text files and refuses traversal', async () => {
+    const files = await makeFiles()
+    await files.ensureLayout()
+    await files.writeAtomic('notes/test.txt', 'hello')
+    expect(await files.readIfExists('notes/test.txt')).toBe('hello')
+    await expect(files.writeAtomic('../escape.md', 'x')).rejects.toThrow('escapes')
+  })
+
+  it('removes files and reports missing ones', async () => {
+    const files = await makeFiles()
+    await files.ensureLayout()
+    await files.writeAtomic('rollout_summaries/tmp.md', 'x')
+    expect(await files.removeFile('rollout_summaries/tmp.md')).toBe(true)
+    expect(await files.readIfExists('rollout_summaries/tmp.md')).toBeUndefined()
+    expect(await files.removeFile('rollout_summaries/tmp.md')).toBe(false)
+    await expect(files.removeFile('../escape.md')).rejects.toThrow('escapes')
+  })
+
   it('rejects invalid slugs and path traversal in retire requests', async () => {
     const files = await makeFiles()
     await files.ensureLayout()

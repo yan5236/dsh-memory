@@ -62,6 +62,18 @@ export class MemoryFiles {
     }
   }
 
+  /** Remove one memory file; resolves false when it does not exist. */
+  async removeFile(relPath: string): Promise<boolean> {
+    const target = this.rel(relPath)
+    try {
+      await unlink(target)
+      return true
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+      throw error
+    }
+  }
+
   async writeAtomic(relPath: string, content: string): Promise<void> {
     const target = this.rel(relPath)
     await mkdir(dirname(target), { recursive: true })
