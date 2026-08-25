@@ -1,8 +1,24 @@
 /** LLM call helpers: streaming text collection, JSON/fence parsing, route resolution. */
-import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm';
+import type { GenerateOptions, LlmResolvedModelInfo, StreamChunk } from '@deepseek-ai/dsh-llm';
 import type { Config } from './config.js';
 export interface LlmRuntime {
     stream(options: GenerateOptions): AsyncIterable<StreamChunk>;
+}
+/**
+ * The llm surface the plugin actually uses: stream plus the optional directory
+ * metadata methods (present on the registered dsh-llm service). The directory
+ * is optional so tests and degraded hosts still work with a bare stream.
+ */
+export interface LlmDirectoryRuntime extends LlmRuntime {
+    listProviders?: () => Array<{
+        id: string;
+        name?: string;
+    }>;
+    listModels?: (provider: string) => Promise<Array<{
+        id: string;
+        name?: string;
+    }>>;
+    resolveModelInfo?: (provider: string, model: string, signal?: AbortSignal) => Promise<LlmResolvedModelInfo>;
 }
 export interface ModelRoute {
     provider: string;
@@ -47,10 +63,19 @@ export declare function parseFencedBlocks(text: string): Map<string, string>;
 export declare function pickBlock(blocks: ReadonlyMap<string, string>, labels: readonly string[]): string | undefined;
 /** Resolve the pipeline's model route: explicit config first, then the deployment default. */
 export declare function resolveRoute(config: Config, defaultSelection: unknown): ModelRoute | undefined;
+/**
+ * Validate one configured reasoning effort against the adapter-owned metadata
+ * for the exact route. Returns the effort id only when the model actually
+ * supports it; unknown/unsupported values degrade to the provider default
+ * instead of failing the call (DSH rejects unsupported efforts before I/O).
+ */
+export declare function resolveReasoningEffort(llm: LlmDirectoryRuntime | undefined, route: ModelRoute, configured: string): Promise<string | undefined>;
+/** Human/run-log label for the effort actually applied. */
+export declare function effortLabel(effort: string | undefined): string;
 /** Build a plugin-owned GenerateOptions for one pipeline call. */
 export declare function generateOptions(route: ModelRoute, system: string, userText: string, maxTokens: number, signal?: AbortSignal, tools?: ReadonlyArray<{
     name: string;
     description: string;
     parameters: Record<string, unknown>;
-}>): GenerateOptions;
+}>, reasoningEffort?: string): GenerateOptions;
 //# sourceMappingURL=llm.d.ts.map

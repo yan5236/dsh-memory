@@ -505,4 +505,55 @@ describe('Phase2Runner', () => {
     expect(resumed.kind).toBe('consolidated')
     expect(h.state.phase2Failures).toBe(0)
   })
+
+  it('applies the configured Phase 2 reasoning effort when the route supports it', async () => {
+    const { llm, calls, resolveCalls } = fakeLlm([PHASE2_BLOCKS('# Memory\n\n## 高等级整合', 'v1\n- 主题：高等级')], ['off', 'low', 'high', 'max'])
+    root = await mkdtemp(join(tmpdir(), 'dsh-memory-phase2-'))
+    const { facility } = fakeKv()
+    const state = new MemoryStateStore(() => facility)
+    await state.init()
+    const files = new MemoryFiles(root)
+    await files.ensureLayout()
+    await files.appendText('raw_memories.md', 'raw\n')
+    state.setPendingConsolidation(true)
+    const runner = new Phase2Runner({
+      llm,
+      state,
+      files,
+      config: () => resolveConfig({ provider: 'mock', model: 'mock', phase2ReasoningEffort: 'max' }),
+      route: () => ({ provider: 'mock', model: 'mock' }),
+    })
+
+    const outcome = await runner.run(false)
+    expect(outcome.kind).toBe('consolidated')
+    expect(resolveCalls()).toBe(1)
+    expect(calls[0]?.reasoningEffort).toBe('max')
+    const logs = await files.listRunLogs()
+    expect(logs[0]?.effort).toBe('max')
+  })
+
+  it('leaves reasoningEffort unset when the configured value is invalid', async () => {
+    const { llm, calls } = fakeLlm([PHASE2_BLOCKS('# Memory\n\n## 默认等级整合', 'v1\n- 主题：默认')], ['off', 'low', 'high', 'max'])
+    root = await mkdtemp(join(tmpdir(), 'dsh-memory-phase2-'))
+    const { facility } = fakeKv()
+    const state = new MemoryStateStore(() => facility)
+    await state.init()
+    const files = new MemoryFiles(root)
+    await files.ensureLayout()
+    await files.appendText('raw_memories.md', 'raw\n')
+    state.setPendingConsolidation(true)
+    const runner = new Phase2Runner({
+      llm,
+      state,
+      files,
+      config: () => resolveConfig({ provider: 'mock', model: 'mock', phase2ReasoningEffort: 'bogus' }),
+      route: () => ({ provider: 'mock', model: 'mock' }),
+    })
+
+    const outcome = await runner.run(false)
+    expect(outcome.kind).toBe('consolidated')
+    expect(calls[0]?.reasoningEffort).toBeUndefined()
+    const logs = await files.listRunLogs()
+    expect(logs[0]?.effort).toBe('default')
+  })
 })

@@ -1,11 +1,22 @@
 /** LLM call helpers: streaming text collection, JSON/fence parsing, route resolution. */
 
 import { randomUUID } from 'node:crypto'
-import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
+import type { GenerateOptions, LlmResolvedModelInfo, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { Config } from './config.js'
 
 export interface LlmRuntime {
   stream(options: GenerateOptions): AsyncIterable<StreamChunk>
+}
+
+/**
+ * The llm surface the plugin actually uses: stream plus the optional directory
+ * metadata methods (present on the registered dsh-llm service). The directory
+ * is optional so tests and degraded hosts still work with a bare stream.
+ */
+export interface LlmDirectoryRuntime extends LlmRuntime {
+  listProviders?: () => Array<{ id: string; name?: string }>
+  listModels?: (provider: string) => Promise<Array<{ id: string; name?: string }>>
+  resolveModelInfo?: (provider: string, model: string, signal?: AbortSignal) => Promise<LlmResolvedModelInfo>
 }
 
 export interface ModelRoute {
@@ -189,6 +200,34 @@ export function resolveRoute(config: Config, defaultSelection: unknown): ModelRo
   return undefined
 }
 
+/**
+ * Validate one configured reasoning effort against the adapter-owned metadata
+ * for the exact route. Returns the effort id only when the model actually
+ * supports it; unknown/unsupported values degrade to the provider default
+ * instead of failing the call (DSH rejects unsupported efforts before I/O).
+ */
+export async function resolveReasoningEffort(
+  llm: LlmDirectoryRuntime | undefined,
+  route: ModelRoute,
+  configured: string,
+): Promise<string | undefined> {
+  const wanted = configured.trim()
+  if (wanted === '' || llm === undefined) return undefined
+  try {
+    const info = await llm.resolveModelInfo?.(route.provider, route.model)
+    const efforts = info?.reasoning?.efforts ?? []
+    if (efforts.some(effort => effort.id === wanted)) return wanted
+  } catch {
+    // Metadata failures (unknown route, dead adapter) degrade to the default.
+  }
+  return undefined
+}
+
+/** Human/run-log label for the effort actually applied. */
+export function effortLabel(effort: string | undefined): string {
+  return effort === undefined || effort.trim() === '' ? 'default' : effort
+}
+
 /** Build a plugin-owned GenerateOptions for one pipeline call. */
 export function generateOptions(
   route: ModelRoute,
@@ -197,10 +236,13 @@ export function generateOptions(
   maxTokens: number,
   signal?: AbortSignal,
   tools?: ReadonlyArray<{ name: string; description: string; parameters: Record<string, unknown> }>,
+  reasoningEffort?: string,
 ): GenerateOptions {
+  const effort = reasoningEffort?.trim()
   return {
     provider: route.provider,
     model: route.model,
+    ...(effort === undefined || effort === '' ? {} : { reasoningEffort: effort as never }),
     system,
     temperature: 0,
     maxTokens,

@@ -43,6 +43,9 @@ SQLite, no git baseline, no resident consolidation subagent.
   VS Code-style collapsible file tree (folders nest their contents), in-dialog editing,
   and two-step deletion. A persistent warning reminds you: memory files generally need no
   manual edits unless you know what you are doing.
+- 🎚️ **Per-phase reasoning effort**: Phase 1 extraction and Phase 2 consolidation each have
+  their own reasoning level (off/low/high/max; empty follows the model default), so you can
+  balance speed and memory quality per stage; run logs record the effort actually applied.
 
 ## How it works
 

@@ -2,7 +2,7 @@
 import type { MemoryStateStore } from './bookkeeping.js';
 import type { Config } from './config.js';
 import type { MemoryFiles } from './files.js';
-import type { LlmRuntime, ModelRoute } from './llm.js';
+import type { LlmDirectoryRuntime, ModelRoute } from './llm.js';
 export type Phase2Outcome = {
     kind: 'consolidated';
     mode: 'init' | 'incremental';
@@ -16,7 +16,7 @@ export type Phase2Outcome = {
 /** Automatic retries pause after this many consecutive failures (manual runs bypass). */
 export declare const MAX_AUTO_PHASE2_RETRIES = 3;
 export interface Phase2Deps {
-    llm: LlmRuntime;
+    llm: LlmDirectoryRuntime;
     state: MemoryStateStore;
     files: MemoryFiles;
     config: () => Config;

@@ -226,6 +226,7 @@ export class MemoryFiles {
           at: parsed.at,
           stage: parsed.stage,
           ...(typeof parsed.route === 'string' ? { route: parsed.route } : {}),
+          ...(typeof parsed.effort === 'string' ? { effort: parsed.effort } : {}),
           outcome: typeof parsed.outcome === 'string' ? parsed.outcome : 'unknown',
           size: file.size,
         })

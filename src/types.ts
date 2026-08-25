@@ -89,6 +89,8 @@ export interface RunLogEntry {
   stage: 'phase1' | 'phase2'
   /** `provider/model` route actually used. */
   route?: string
+  /** Reasoning effort actually applied (`default` when unset/invalid). */
+  effort?: string
   /** Short human-readable outcome, e.g. "done 2/3" or "skipped:no-route". */
   outcome: string
   detail: Record<string, unknown>
@@ -100,6 +102,7 @@ export interface RunLogSummary {
   at: number
   stage: 'phase1' | 'phase2'
   route?: string
+  effort?: string
   outcome: string
   size: number
 }

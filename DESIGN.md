@@ -31,6 +31,7 @@ Confirmed with the user before implementation (2026-08):
 | Usage source | `memory_read` / `memory_search` calls (not injection, not list) | Mirrors Codex read-path telemetry: only explicit retrieval counts as "used" |
 | Run logs | `logs/<stamp>-<stage>.json`, newest 50 kept | Settings page "what did the AI do" panel; bounded storage, redacted content |
 | Running state | `get-state` exposes phase1/phase2 single-flight flags; buttons disabled while running | Reopening the settings page no longer "unlocks" an in-flight run |
+| Per-phase reasoning effort | `phase1ReasoningEffort` / `phase2ReasoningEffort` (empty = provider default), validated against adapter metadata per run | Users trade latency/cost vs extraction/consolidation depth independently; unsupported values degrade to the default instead of failing calls |
 
 ## Architecture
 
@@ -131,6 +132,17 @@ Both phases constrain model output through the native function-calling channel
 The plugin writes files itself; the model only fills structured arguments.
 Free-text parsing remains as a fallback for models that ignore tool schemas. Phase 1 also
 retries once with a halved transcript when output is truncated.
+
+### Reasoning effort per phase
+
+Each phase may be given its own reasoning effort (`off`/`low`/`high`/`max` on DeepSeek;
+empty uses the provider default). At the start of every run the runner resolves the
+adapter-owned effort list for the exact route through `llm.resolveModelInfo` and applies
+the configured id only when the model actually supports it; unknown values (or metadata
+failures) degrade to the provider default instead of failing the call, since DSH rejects
+unsupported efforts before provider I/O. The settings page offers the adapter-reported
+efforts (falling back to the DeepSeek levels) for each phase, and run logs record the
+effort actually applied.
 
 ### Skill promotion
 

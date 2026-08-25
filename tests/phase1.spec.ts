@@ -352,4 +352,75 @@ describe('Phase1Runner', () => {
       { id: 's2', outcome: 'done' },
     ])
   })
+
+  it('records the applied effort in the run log (default when unconfigured)', async () => {
+    const h = await harness([PHASE1_JSON('effort-log')])
+    h.headers.push(activeHeader('s1'))
+    h.setEvents('s1', [userMessage('一'), userMessage('二'), userMessage('三'), userMessage('四')])
+
+    await h.runner.run()
+    const logs = await h.files.listRunLogs()
+    expect(logs[0]?.effort).toBe('default')
+  })
+
+  it('applies a configured reasoning effort that the route supports', async () => {
+    const { llm, calls, resolveCalls } = fakeLlm([PHASE1_JSON('effort-session')], ['off', 'low', 'high', 'max'])
+    root = await mkdtemp(join(tmpdir(), 'dsh-memory-phase1-'))
+    const { facility } = fakeKv()
+    const state = new MemoryStateStore(() => facility)
+    await state.init()
+    const files = new MemoryFiles(root)
+    const headers: SessionHeaderLite[] = [{ id: 's1', createdAt: Date.now() }]
+    const events = [userMessage('一'), userMessage('二'), userMessage('三'), userMessage('四')]
+    const runner = new Phase1Runner({
+      llm,
+      state,
+      files,
+      sessions: () => ({
+        async listSessions() {
+          return headers
+        },
+        async readSession(id) {
+          return { session: { id }, events }
+        },
+      }),
+      config: () => resolveConfig({ provider: 'mock', model: 'mock', phase1ReasoningEffort: 'high' }),
+      route: () => ({ provider: 'mock', model: 'mock' }),
+    })
+
+    const summary = await runner.run()
+    expect(summary).toMatchObject({ done: 1 })
+    expect(resolveCalls()).toBe(1)
+    expect(calls[0]?.reasoningEffort).toBe('high')
+  })
+
+  it('degrades an unsupported effort to the provider default instead of failing', async () => {
+    const { llm, calls } = fakeLlm([PHASE1_JSON('effort-session')], ['off', 'low', 'high', 'max'])
+    root = await mkdtemp(join(tmpdir(), 'dsh-memory-phase1-'))
+    const { facility } = fakeKv()
+    const state = new MemoryStateStore(() => facility)
+    await state.init()
+    const files = new MemoryFiles(root)
+    const headers: SessionHeaderLite[] = [{ id: 's1', createdAt: Date.now() }]
+    const events = [userMessage('一'), userMessage('二'), userMessage('三'), userMessage('四')]
+    const runner = new Phase1Runner({
+      llm,
+      state,
+      files,
+      sessions: () => ({
+        async listSessions() {
+          return headers
+        },
+        async readSession(id) {
+          return { session: { id }, events }
+        },
+      }),
+      config: () => resolveConfig({ provider: 'mock', model: 'mock', phase1ReasoningEffort: 'ultra-deep' }),
+      route: () => ({ provider: 'mock', model: 'mock' }),
+    })
+
+    const summary = await runner.run()
+    expect(summary).toMatchObject({ done: 1 })
+    expect(calls[0]?.reasoningEffort).toBeUndefined()
+  })
 })

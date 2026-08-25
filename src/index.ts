@@ -15,7 +15,7 @@ import { Config, resolveConfig } from './config.js'
 import type { Config as ConfigShape } from './config.js'
 import { MemoryFiles } from './files.js'
 import { MemoryInjection, type SystemPromptRuntime } from './inject.js'
-import type { LlmRuntime, ModelRoute } from './llm.js'
+import type { LlmDirectoryRuntime, ModelRoute } from './llm.js'
 import { resolveRoute } from './llm.js'
 import { resolveMemoryRoot } from './paths.js'
 import { Phase1Runner } from './phase1.js'
@@ -34,10 +34,10 @@ export { MemoryStateStore, type KvFacilityLike, type KvUnitLike } from './bookke
 export { MemoryFiles, ensureSummaryV1 } from './files.js'
 export { MemoryInjection, buildSectionText, GUIDE_ORDER, type SystemPromptRuntime } from './inject.js'
 export {
-  collectResponse, collectText, collectTextDetails, extractJsonObject, generateOptions,
-  LlmCallError, parseCallArguments, parseFencedBlocks, pickBlock, resolveRoute, stripFences,
+  collectResponse, collectText, collectTextDetails, effortLabel, extractJsonObject, generateOptions,
+  LlmCallError, parseCallArguments, parseFencedBlocks, pickBlock, resolveReasoningEffort, resolveRoute, stripFences,
 } from './llm.js'
-export type { CollectedCall, CollectedResponse, CollectedText, LlmRuntime, ModelRoute } from './llm.js'
+export type { CollectedCall, CollectedResponse, CollectedText, LlmDirectoryRuntime, LlmRuntime, ModelRoute } from './llm.js'
 export { defaultMemoryRoot, isWithin, resolveMemoryRoot, sanitizeSlug } from './paths.js'
 export { Phase1Runner, type Phase1Deps, type Phase1Summary } from './phase1.js'
 export { Phase2Runner, type Phase2Deps, type Phase2Outcome } from './phase2.js'
@@ -67,7 +67,7 @@ interface SessionPersistenceLike {
 
 export function apply(ctx: Context, config: Partial<ConfigShape> = {}): void {
   const base = resolveConfig(config)
-  const llm = ctx.get('llm') as LlmRuntime | undefined
+  const llm = ctx.get('llm') as LlmDirectoryRuntime | undefined
   if (llm === undefined) throw new Error('dsh-memory requires the llm service')
   const timer = ctx.get('timer') as TimerService | undefined
   if (timer === undefined) throw new Error('dsh-memory requires the timer service')

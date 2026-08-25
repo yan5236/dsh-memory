@@ -4,7 +4,7 @@ import type { MemoryStateStore } from './bookkeeping.js'
 import type { Config } from './config.js'
 import { clampOverrides } from './config.js'
 import type { MemoryFiles } from './files.js'
-import type { LlmRuntime, ModelRoute } from './llm.js'
+import type { LlmDirectoryRuntime, ModelRoute } from './llm.js'
 import type { Phase1Runner } from './phase1.js'
 import type { Phase2Runner, Phase2Outcome } from './phase2.js'
 import { messageOf } from './util.js'
@@ -27,11 +27,8 @@ export interface WebServerRuntime {
   }): () => void
 }
 
-/** Structural view of the llm surface the RPC needs beyond streaming. */
-export interface LlmDirectoryRuntime extends LlmRuntime {
-  listProviders?: () => Array<{ id: string; name?: string }>
-  listModels?: (provider: string) => Promise<Array<{ id: string; name?: string }>>
-}
+/** Structural view of the llm surface the RPC needs beyond streaming (alias). */
+export type { LlmDirectoryRuntime } from './llm.js'
 
 export interface RpcDeps {
   state: MemoryStateStore
@@ -60,6 +57,13 @@ export interface ModelEntry {
   name: string
 }
 
+/** One adapter-owned reasoning effort selectable for the current route. */
+export interface ReasoningEffortEntry {
+  id: string
+  name: string
+  description?: string
+}
+
 export interface StatePayload {
   enabled: boolean
   root: string
@@ -69,6 +73,8 @@ export interface StatePayload {
   route: ModelRoute | null
   providers: ProviderEntry[]
   models: ModelEntry[]
+  /** Adapter-owned reasoning efforts selectable on the current route (empty = unknown). */
+  reasoningEfforts: ReasoningEffortEntry[]
   counts: { done: number; noop: number; failed: number; running: number; total: number }
   recentFailures: FailureEntry[]
   stats: {
@@ -113,6 +119,21 @@ async function listModels(deps: RpcDeps, provider: string): Promise<ModelEntry[]
   }
 }
 
+/** Reasoning efforts the adapter exposes for one exact route (empty = unknown). */
+async function listReasoningEfforts(deps: RpcDeps, route: ModelRoute | undefined): Promise<ReasoningEffortEntry[]> {
+  if (route === undefined) return []
+  try {
+    const info = await deps.llm.resolveModelInfo?.(route.provider, route.model)
+    return (info?.reasoning?.efforts ?? []).map(effort => ({
+      id: effort.id,
+      name: effort.name,
+      ...(effort.description === undefined ? {} : { description: effort.description }),
+    }))
+  } catch {
+    return []
+  }
+}
+
 async function statePayload(deps: RpcDeps): Promise<StatePayload> {
   const cfg = deps.config()
   const snapshot = deps.state.snapshot()
@@ -137,6 +158,7 @@ async function statePayload(deps: RpcDeps): Promise<StatePayload> {
     route: deps.route() ?? null,
     providers: await listProviders(deps),
     models: await listModels(deps, cfg.provider),
+    reasoningEfforts: await listReasoningEfforts(deps, deps.route()),
     counts,
     recentFailures: failures.slice(0, 3),
     stats,

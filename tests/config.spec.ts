@@ -29,3 +29,21 @@ describe('config: maxUnusedDays', () => {
     expect(clampOverrides({ phase2MaxTokens: 100 }).phase2MaxTokens).toBe(512)
   })
 })
+
+describe('config: per-phase reasoning effort', () => {
+  it('defaults both phases to empty (provider default) and resolves base/overrides', () => {
+    expect(DEFAULTS.phase1ReasoningEffort).toBe('')
+    expect(DEFAULTS.phase2ReasoningEffort).toBe('')
+    expect(resolveConfig({}).phase1ReasoningEffort).toBe('')
+    expect(resolveConfig({ phase1ReasoningEffort: 'high' }).phase1ReasoningEffort).toBe('high')
+    expect(resolveConfig({}, { phase2ReasoningEffort: 'max' }).phase2ReasoningEffort).toBe('max')
+  })
+
+  it('passes through string effort values and rejects non-strings / oversized values', () => {
+    expect(clampOverrides({ phase1ReasoningEffort: 'off' })).toEqual({ phase1ReasoningEffort: 'off' })
+    expect(clampOverrides({ phase2ReasoningEffort: 'high' })).toEqual({ phase2ReasoningEffort: 'high' })
+    expect(clampOverrides({ phase1ReasoningEffort: 42 }).phase1ReasoningEffort).toBeUndefined()
+    expect(clampOverrides({ phase1ReasoningEffort: 'x'.repeat(65) }).phase1ReasoningEffort).toBeUndefined()
+    expect(clampOverrides({ phase2ReasoningEffort: true }).phase2ReasoningEffort).toBeUndefined()
+  })
+})

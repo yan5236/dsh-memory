@@ -2,7 +2,7 @@
 
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { KvFacilityLike, KvUnitLike } from '../src/bookkeeping.js'
-import type { LlmRuntime } from '../src/llm.js'
+import type { LlmDirectoryRuntime, LlmRuntime } from '../src/llm.js'
 
 export function fakeKv(): { facility: KvFacilityLike; records: Map<string, unknown> } {
   const records = new Map<string, unknown>()
@@ -32,8 +32,18 @@ export type FakeResponse = string | Error | {
   truncated?: boolean
 }
 
-export function fakeLlm(responses: Array<FakeResponse> = []): { llm: LlmRuntime; calls: GenerateOptions[] } {
+/**
+ * Build a programmable LLM fake. `efforts` (optional) makes the fake expose
+ * an adapter-owned reasoning-effort list via resolveModelInfo, so effort
+ * resolution can be tested end to end. `resolveCalls` records every
+ * resolveModelInfo call.
+ */
+export function fakeLlm(
+  responses: Array<FakeResponse> = [],
+  efforts: string[] = [],
+): { llm: LlmRuntime; calls: GenerateOptions[]; resolveCalls: () => number } {
   const calls: GenerateOptions[] = []
+  let resolveCalls = 0
   const llm: LlmRuntime = {
     stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
       calls.push(options)
@@ -59,7 +69,20 @@ export function fakeLlm(responses: Array<FakeResponse> = []): { llm: LlmRuntime;
       })()
     },
   }
-  return { llm, calls }
+  if (efforts.length > 0) {
+    ;(llm as LlmDirectoryRuntime).resolveModelInfo = async () => {
+      resolveCalls += 1
+      return {
+        provider: 'mock',
+        model: 'mock',
+        reasoning: {
+          efforts: efforts.map(id => ({ id: id as never, name: id })),
+          defaultEffort: efforts[0] as never,
+        },
+      } as never
+    }
+  }
+  return { llm, calls, resolveCalls: () => resolveCalls }
 }
 
 export function userMessage(text: string, kind: 'user' | 'plugin' = 'user'): unknown {

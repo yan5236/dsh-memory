@@ -8,6 +8,14 @@ export interface Config {
     /** Optional dedicated LLM route for the memory pipeline; empty uses the deployment default model. */
     provider: string;
     model: string;
+    /**
+     * Reasoning effort (思考等级) for Phase 1 extraction calls. One of the
+     * adapter-exposed ids (`off`/`low`/`high`/`max` on DeepSeek); empty uses the
+     * provider default. Invalid values degrade to the default at call time.
+     */
+    phase1ReasoningEffort: string;
+    /** Reasoning effort for Phase 2 consolidation calls; empty uses the provider default. */
+    phase2ReasoningEffort: string;
     /** Debounce delay between a root session turn stopping and the extraction run. */
     idleDebounceMs: number;
     /** Sessions extracted per pipeline run. */
@@ -53,7 +61,7 @@ export declare const Config: z<Config>;
 /** Merge composition base and runtime overrides over schema defaults. */
 export declare function resolveConfig(base?: Partial<Config>, overrides?: Partial<Config>): Config;
 /** Whitelisted keys the settings page may override, with safe range clamps. */
-export declare const OVERRIDABLE_KEYS: readonly ["enabled", "provider", "model", "idleDebounceMs", "maxRolloutsPerRun", "extractionConcurrency", "minSessionEvents", "maxRolloutAgeDays", "maxTranscriptChars", "phase1MaxTokens", "consolidationCooldownMs", "maxRawChars", "phase2MaxTokens", "maxSummaryChars", "retryLimit", "maxUnusedDays"];
+export declare const OVERRIDABLE_KEYS: readonly ["enabled", "provider", "model", "phase1ReasoningEffort", "phase2ReasoningEffort", "idleDebounceMs", "maxRolloutsPerRun", "extractionConcurrency", "minSessionEvents", "maxRolloutAgeDays", "maxTranscriptChars", "phase1MaxTokens", "consolidationCooldownMs", "maxRawChars", "phase2MaxTokens", "maxSummaryChars", "retryLimit", "maxUnusedDays"];
 export type OverridableKey = (typeof OVERRIDABLE_KEYS)[number];
 /** Validate and clamp one settings-page override patch. */
 export declare function clampOverrides(patch: Record<string, unknown>): Partial<Config>;

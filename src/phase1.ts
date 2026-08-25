@@ -3,8 +3,8 @@
 import type { MemoryStateStore } from './bookkeeping.js'
 import type { Config } from './config.js'
 import type { MemoryFiles } from './files.js'
-import type { LlmRuntime, ModelRoute } from './llm.js'
-import { collectResponse, extractJsonObject, generateOptions, parseCallArguments } from './llm.js'
+import type { LlmDirectoryRuntime, ModelRoute } from './llm.js'
+import { collectResponse, effortLabel, extractJsonObject, generateOptions, parseCallArguments, resolveReasoningEffort } from './llm.js'
 import { sanitizeSlug } from './paths.js'
 import { PHASE1_SYSTEM, PHASE1_TOOL, phase1User } from './prompts.js'
 import { redactSecrets, renderTranscript, selectCandidates } from './rollout.js'
@@ -22,7 +22,7 @@ export interface Phase1Summary {
 }
 
 export interface Phase1Deps {
-  llm: LlmRuntime
+  llm: LlmDirectoryRuntime
   state: MemoryStateStore
   files: MemoryFiles
   /** Accessors so late-mounted services and runtime overrides are honored per run. */
@@ -84,7 +84,7 @@ export class Phase1Runner {
   }
 
   private async execute(): Promise<Phase1Summary> {
-    const { state, files, config } = this.deps
+    const { state, files, config, llm } = this.deps
     await files.ensureLayout()
     const reader = this.deps.sessions()
     if (reader === undefined) {
@@ -98,6 +98,7 @@ export class Phase1Runner {
     }
     const clock = this.deps.now ?? Date.now
     const cfg = config()
+    const effort = await resolveReasoningEffort(llm, route, cfg.phase1ReasoningEffort)
     const headers = await reader.listSessions()
     const selection = selectCandidates(headers, id => state.processedOf(id), {
       now: clock,
@@ -116,7 +117,7 @@ export class Phase1Runner {
     const workers = Array.from({ length: Math.max(1, cfg.extractionConcurrency) }, async () => {
       while (index < selection.candidates.length) {
         const header = selection.candidates[index++]!
-        const outcome = await this.extractOne(header, route, cfg)
+        const outcome = await this.extractOne(header, route, cfg, effort)
         sessions.push({ id: header.id, outcome })
         if (outcome === 'done') done += 1
         else if (outcome === 'noop') noop += 1
@@ -143,6 +144,7 @@ export class Phase1Runner {
     const outcomeText = `done ${done}/${summary.selected} (noop ${noop}, unchanged ${unchanged}, failed ${failed})`
     await files.writeRunLog('phase1', {
       route: `${route.provider}/${route.model}`,
+      effort: effortLabel(effort),
       outcome: outcomeText,
       detail: { summary, sessions },
     }).catch(() => {})
@@ -153,6 +155,7 @@ export class Phase1Runner {
     header: SessionHeaderLite,
     route: ModelRoute,
     cfg: Config,
+    effort: string | undefined,
   ): Promise<ExtractOutcome> {
     const { state, files } = this.deps
     const previous = state.processedOf(header.id)
@@ -180,7 +183,7 @@ export class Phase1Runner {
           state.claimUnchanged(header.id, Math.max(lastSeq ?? -1, maxSeq))
           return 'unchanged'
         }
-        const fields = await this.callExtract(header, route, cfg, rendered.text, true)
+        const fields = await this.callExtract(header, route, cfg, rendered.text, true, effort)
         if (fields.rawMemory === '' && fields.rolloutSummary === '') {
           state.claimUnchanged(header.id, maxSeq)
           return 'unchanged'
@@ -200,7 +203,7 @@ export class Phase1Runner {
         state.claimNoop(header.id)
         return 'noop'
       }
-      const fields = await this.callExtract(header, route, cfg, rendered.text, false)
+      const fields = await this.callExtract(header, route, cfg, rendered.text, false, effort)
       if (fields.rawMemory === '' && fields.rolloutSummary === '') {
         state.claimNoop(header.id)
         return 'noop'
@@ -229,6 +232,7 @@ export class Phase1Runner {
     cfg: Config,
     transcript: string,
     delta: boolean,
+    effort: string | undefined,
   ): Promise<ExtractFields> {
     const { llm } = this.deps
     const meta = {
@@ -239,7 +243,7 @@ export class Phase1Runner {
     const extract = async (text: string): Promise<ExtractFields> => {
       const response = await collectResponse(
         llm,
-        generateOptions(route, PHASE1_SYSTEM, phase1User(meta, text, delta), cfg.phase1MaxTokens, undefined, [PHASE1_TOOL]),
+        generateOptions(route, PHASE1_SYSTEM, phase1User(meta, text, delta), cfg.phase1MaxTokens, undefined, [PHASE1_TOOL], effort),
         80_000,
       )
       let raw: Record<string, unknown>

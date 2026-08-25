@@ -4,8 +4,8 @@ import type { MemoryStateStore } from './bookkeeping.js'
 import type { Config } from './config.js'
 import type { MemoryFiles } from './files.js'
 import { ensureSummaryV1 } from './files.js'
-import type { LlmRuntime, ModelRoute } from './llm.js'
-import { collectResponse, extractJsonObject, generateOptions, parseCallArguments, parseFencedBlocks, pickBlock } from './llm.js'
+import type { LlmDirectoryRuntime, ModelRoute } from './llm.js'
+import { collectResponse, effortLabel, extractJsonObject, generateOptions, parseCallArguments, parseFencedBlocks, pickBlock, resolveReasoningEffort } from './llm.js'
 import { PHASE2_SYSTEM, PHASE2_TOOL, phase2User } from './prompts.js'
 import { redactSecrets } from './rollout.js'
 import { messageOf } from './util.js'
@@ -19,7 +19,7 @@ export type Phase2Outcome =
 export const MAX_AUTO_PHASE2_RETRIES = 3
 
 export interface Phase2Deps {
-  llm: LlmRuntime
+  llm: LlmDirectoryRuntime
   state: MemoryStateStore
   files: MemoryFiles
   config: () => Config
@@ -68,10 +68,11 @@ export class Phase2Runner {
     const cfg = config()
     const clock = this.deps.now ?? Date.now
     const now = clock()
-    const writeLog = async (outcome: Phase2Outcome, detail: Record<string, unknown> = {}): Promise<void> => {
+    const writeLog = async (outcome: Phase2Outcome, detail: Record<string, unknown> = {}, meta: { effort?: string } = {}): Promise<void> => {
       try {
         await files.writeRunLog('phase2', {
           ...(this.deps.route() === undefined ? {} : { route: `${this.deps.route()!.provider}/${this.deps.route()!.model}` }),
+          ...(meta.effort === undefined ? {} : { effort: meta.effort }),
           outcome: describeOutcome(outcome),
           detail,
         }, now)
@@ -107,6 +108,7 @@ export class Phase2Runner {
       await writeLog(outcome)
       return outcome
     }
+    const effort = await resolveReasoningEffort(llm, modelRoute, cfg.phase2ReasoningEffort)
     await files.ensureLayout()
     const raw = ((await files.readIfExists('raw_memories.md')) ?? '').trim()
     const noteEntries = await files.pendingNotes()
@@ -152,7 +154,7 @@ export class Phase2Runner {
     try {
       response = await collectResponse(
         llm,
-        generateOptions(modelRoute, PHASE2_SYSTEM, userText, cfg.phase2MaxTokens, undefined, [PHASE2_TOOL]),
+        generateOptions(modelRoute, PHASE2_SYSTEM, userText, cfg.phase2MaxTokens, undefined, [PHASE2_TOOL], effort),
         800_000,
       )
       // Structured tool call first; fenced text blocks remain a fallback for
@@ -281,7 +283,7 @@ export class Phase2Runner {
           retired_summaries: retiredMoved,
         },
         ...(skillErrors.length === 0 ? {} : { skillErrors }),
-      })
+      }, { effort: effortLabel(effort) })
       return outcome
     } catch (error: unknown) {
       // Keep the pending flag and schedule an automatic retry in ~15 minutes
@@ -304,7 +306,7 @@ export class Phase2Runner {
           truncated: response.truncated,
         },
         consecutiveFailures: failures,
-      })
+      }, { effort: effortLabel(effort) })
       return outcome
     }
   }

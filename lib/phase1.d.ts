@@ -2,7 +2,7 @@
 import type { MemoryStateStore } from './bookkeeping.js';
 import type { Config } from './config.js';
 import type { MemoryFiles } from './files.js';
-import type { LlmRuntime, ModelRoute } from './llm.js';
+import type { LlmDirectoryRuntime, ModelRoute } from './llm.js';
 import type { SessionReader } from './types.js';
 export interface Phase1Summary {
     selected: number;
@@ -14,7 +14,7 @@ export interface Phase1Summary {
     skippedNoSessions: boolean;
 }
 export interface Phase1Deps {
-    llm: LlmRuntime;
+    llm: LlmDirectoryRuntime;
     state: MemoryStateStore;
     files: MemoryFiles;
     /** Accessors so late-mounted services and runtime overrides are honored per run. */

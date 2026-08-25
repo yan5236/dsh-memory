@@ -10,6 +10,14 @@ export interface Config {
   /** Optional dedicated LLM route for the memory pipeline; empty uses the deployment default model. */
   provider: string
   model: string
+  /**
+   * Reasoning effort (思考等级) for Phase 1 extraction calls. One of the
+   * adapter-exposed ids (`off`/`low`/`high`/`max` on DeepSeek); empty uses the
+   * provider default. Invalid values degrade to the default at call time.
+   */
+  phase1ReasoningEffort: string
+  /** Reasoning effort for Phase 2 consolidation calls; empty uses the provider default. */
+  phase2ReasoningEffort: string
   /** Debounce delay between a root session turn stopping and the extraction run. */
   idleDebounceMs: number
   /** Sessions extracted per pipeline run. */
@@ -56,6 +64,8 @@ export const DEFAULTS: Config = {
   memoryRoot: '',
   provider: '',
   model: '',
+  phase1ReasoningEffort: '',
+  phase2ReasoningEffort: '',
   idleDebounceMs: 3 * 60_000,
   maxRolloutsPerRun: 3,
   extractionConcurrency: 1,
@@ -78,6 +88,8 @@ export const Config: z<Config> = z.object({
   memoryRoot: z.string().default(DEFAULTS.memoryRoot),
   provider: z.string().default(DEFAULTS.provider),
   model: z.string().default(DEFAULTS.model),
+  phase1ReasoningEffort: z.string().default(DEFAULTS.phase1ReasoningEffort),
+  phase2ReasoningEffort: z.string().default(DEFAULTS.phase2ReasoningEffort),
   idleDebounceMs: z.number().default(DEFAULTS.idleDebounceMs),
   maxRolloutsPerRun: z.number().default(DEFAULTS.maxRolloutsPerRun),
   extractionConcurrency: z.number().default(DEFAULTS.extractionConcurrency),
@@ -115,6 +127,8 @@ export const OVERRIDABLE_KEYS = [
   'enabled',
   'provider',
   'model',
+  'phase1ReasoningEffort',
+  'phase2ReasoningEffort',
   'idleDebounceMs',
   'maxRolloutsPerRun',
   'extractionConcurrency',
@@ -136,6 +150,8 @@ const RANGES: Record<OverridableKey, readonly [number, number]> = {
   enabled: [0, 1],
   provider: [0, 0],
   model: [0, 0],
+  phase1ReasoningEffort: [0, 0],
+  phase2ReasoningEffort: [0, 0],
   idleDebounceMs: [10_000, 3_600_000],
   maxRolloutsPerRun: [1, 50],
   extractionConcurrency: [1, 8],
@@ -163,6 +179,10 @@ export function clampOverrides(patch: Record<string, unknown>): Partial<Config> 
     }
     if (key === 'provider' || key === 'model') {
       if (typeof value === 'string' && value.length <= 200) out[key] = value
+      continue
+    }
+    if (key === 'phase1ReasoningEffort' || key === 'phase2ReasoningEffort') {
+      if (typeof value === 'string' && value.length <= 64) out[key] = value
       continue
     }
     if (typeof value !== 'number' && typeof value !== 'string') continue
