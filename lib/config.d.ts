@@ -3,6 +3,8 @@ import z from '@deepseek-ai/schemastery';
 export interface Config {
     /** Master switch: extraction, consolidation, and injection. */
     enabled: boolean;
+    /** Whether the left sidebar shows the 记忆库 entry that opens the vault page. */
+    showVaultInSidebar: boolean;
     /** Memory root directory; empty resolves to `$DSH_HOME/memories` (or `~/.dsh/memories`). */
     memoryRoot: string;
     /** Optional dedicated LLM route for the memory pipeline; empty uses the deployment default model. */
@@ -61,7 +63,7 @@ export declare const Config: z<Config>;
 /** Merge composition base and runtime overrides over schema defaults. */
 export declare function resolveConfig(base?: Partial<Config>, overrides?: Partial<Config>): Config;
 /** Whitelisted keys the settings page may override, with safe range clamps. */
-export declare const OVERRIDABLE_KEYS: readonly ["enabled", "provider", "model", "phase1ReasoningEffort", "phase2ReasoningEffort", "idleDebounceMs", "maxRolloutsPerRun", "extractionConcurrency", "minSessionEvents", "maxRolloutAgeDays", "maxTranscriptChars", "phase1MaxTokens", "consolidationCooldownMs", "maxRawChars", "phase2MaxTokens", "maxSummaryChars", "retryLimit", "maxUnusedDays"];
+export declare const OVERRIDABLE_KEYS: readonly ["enabled", "showVaultInSidebar", "provider", "model", "phase1ReasoningEffort", "phase2ReasoningEffort", "idleDebounceMs", "maxRolloutsPerRun", "extractionConcurrency", "minSessionEvents", "maxRolloutAgeDays", "maxTranscriptChars", "phase1MaxTokens", "consolidationCooldownMs", "maxRawChars", "phase2MaxTokens", "maxSummaryChars", "retryLimit", "maxUnusedDays"];
 export type OverridableKey = (typeof OVERRIDABLE_KEYS)[number];
 /** Validate and clamp one settings-page override patch. */
 export declare function clampOverrides(patch: Record<string, unknown>): Partial<Config>;

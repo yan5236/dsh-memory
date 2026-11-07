@@ -5,6 +5,8 @@ import z from '@deepseek-ai/schemastery'
 export interface Config {
   /** Master switch: extraction, consolidation, and injection. */
   enabled: boolean
+  /** Whether the left sidebar shows the 记忆库 entry that opens the vault page. */
+  showVaultInSidebar: boolean
   /** Memory root directory; empty resolves to `$DSH_HOME/memories` (or `~/.dsh/memories`). */
   memoryRoot: string
   /** Optional dedicated LLM route for the memory pipeline; empty uses the deployment default model. */
@@ -61,6 +63,7 @@ export interface Config {
 
 export const DEFAULTS: Config = {
   enabled: true,
+  showVaultInSidebar: true,
   memoryRoot: '',
   provider: '',
   model: '',
@@ -87,6 +90,7 @@ export const DEFAULTS: Config = {
 
 export const Config: z<Config> = z.object({
   enabled: z.boolean().default(DEFAULTS.enabled),
+  showVaultInSidebar: z.boolean().default(DEFAULTS.showVaultInSidebar),
   memoryRoot: z.string().default(DEFAULTS.memoryRoot),
   provider: z.string().default(DEFAULTS.provider),
   model: z.string().default(DEFAULTS.model),
@@ -127,6 +131,7 @@ export function resolveConfig(base: Partial<Config> = {}, overrides: Partial<Con
 /** Whitelisted keys the settings page may override, with safe range clamps. */
 export const OVERRIDABLE_KEYS = [
   'enabled',
+  'showVaultInSidebar',
   'provider',
   'model',
   'phase1ReasoningEffort',
@@ -150,6 +155,7 @@ export type OverridableKey = (typeof OVERRIDABLE_KEYS)[number]
 
 const RANGES: Record<OverridableKey, readonly [number, number]> = {
   enabled: [0, 1],
+  showVaultInSidebar: [0, 1],
   provider: [0, 0],
   model: [0, 0],
   phase1ReasoningEffort: [0, 0],
@@ -175,7 +181,7 @@ export function clampOverrides(patch: Record<string, unknown>): Partial<Config> 
   for (const key of OVERRIDABLE_KEYS) {
     const value = patch[key]
     if (value === undefined) continue
-    if (key === 'enabled') {
+    if (key === 'enabled' || key === 'showVaultInSidebar') {
       out[key] = value === true || value === 'true'
       continue
     }

@@ -261,12 +261,15 @@ function MemorySettings(): React.ReactNode {
   const [deleteArmed, setDeleteArmed] = React.useState(false)
   const [editorBusy, setEditorBusy] = React.useState(false)
   const [editorNotice, setEditorNotice] = React.useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
+  /** In-flight save of the sidebar-entry preference (applied immediately, not with 保存配置). */
+  const [sidebarBusy, setSidebarBusy] = React.useState(false)
 
   const applyState = (state: StatePayload): void => {
     setPayload(state)
     const cfg = state.config as Record<string, unknown>
     setForm(prev => ({
       enabled: state.enabled === true,
+      showVaultInSidebar: cfg.showVaultInSidebar !== false,
       idleDebounceMinutes: Math.round(Number(cfg.idleDebounceMs ?? 180000) / 60_000),
       cooldownHours: Math.round(Number(cfg.consolidationCooldownMs ?? 21600000) / 3_600_000),
       maxRolloutsPerRun: Number(cfg.maxRolloutsPerRun ?? 3),
@@ -482,6 +485,31 @@ function MemorySettings(): React.ReactNode {
       setNotice({ kind: 'err', text: `操作失败：${error instanceof Error ? error.message : String(error)}` })
     } finally {
       setBusy(false)
+    }
+  }
+
+  /**
+   * 侧栏入口开关：写入持久化配置的同时立刻重挂/卸载侧栏面板，
+   * 不需要点「保存配置」，失败时回滚开关与侧栏状态。
+   */
+  const toggleSidebarEntry = async (visible: boolean): Promise<void> => {
+    setForm(current => (current === null ? current : { ...current, showVaultInSidebar: visible }))
+    setVaultSidebarEntry(visible)
+    setSidebarBusy(true)
+    setNotice(null)
+    try {
+      const result = await rpc('set-config', { showVaultInSidebar: visible })
+      if (result.ok === false) throw new Error(String(result.message ?? '保存失败'))
+      setNotice({
+        kind: 'ok',
+        text: visible ? '已开启：左侧栏显示「记忆库」入口。' : '已关闭：左侧栏不再显示「记忆库」入口，随时可以回到这里重新开启。',
+      })
+    } catch (error) {
+      setVaultSidebarEntry(!visible)
+      setForm(current => (current === null ? current : { ...current, showVaultInSidebar: !visible }))
+      setNotice({ kind: 'err', text: `切换失败：${error instanceof Error ? error.message : String(error)}` })
+    } finally {
+      setSidebarBusy(false)
     }
   }
 
@@ -752,6 +780,17 @@ function MemorySettings(): React.ReactNode {
         el('span', { className: 'dm-label' }, '记忆库管理'),
         el('span', { style: { flex: 1 } }),
         el('button', { className: 'dm-btn primary', disabled: busy, onClick: () => { void openEditor() } }, '打开记忆库')),
+      el('label', { className: 'dm-check' },
+        el('input', {
+          type: 'checkbox',
+          checked: form.showVaultInSidebar !== false,
+          disabled: sidebarBusy,
+          onChange: event => { void toggleSidebarEntry(event.target.checked) },
+        }),
+        '在左侧栏显示「记忆库」入口',
+        el('span', { className: 'dm-dimmed' }, sidebarBusy ? '保存中…' : '立即生效')),
+      el('p', { className: 'dm-dimmed' },
+        '关闭后左侧栏不再显示记忆库图标；记忆库页面与文件不受影响，随时可以回到这里重新开启。'),
       el('p', { className: 'dm-dimmed' },
         '查看、编辑或删除记忆库文件（MEMORY.md、会话回顾、ad hoc 笔记等）。编辑记忆文件属于高级操作，正常交由管道的自动提取与整合即可。')),
     el('div', { className: 'dm-card' },
@@ -806,9 +845,78 @@ function MemorySettings(): React.ReactNode {
 
 export const inject: string[] = ['slots']
 
+/**
+ * localStorage mirror of the sidebar-entry preference. The durable value lives
+ * in the plugin config (settings page), but the client must decide whether to
+ * register the panel during `apply`, before any RPC resolves — reading the last
+ * known value here avoids flashing an entry the user deliberately hid.
+ */
+const VAULT_SIDEBAR_KEY = 'dsh-memory-vault-sidebar'
+
+function readSidebarPreference(): boolean {
+  try {
+    return window.localStorage.getItem(VAULT_SIDEBAR_KEY) !== '0'
+  } catch {
+    return true
+  }
+}
+
+function writeSidebarPreference(visible: boolean): void {
+  try {
+    window.localStorage.setItem(VAULT_SIDEBAR_KEY, visible ? '1' : '0')
+  } catch {
+    // Private mode / storage disabled: the server config still decides.
+  }
+}
+
+let vaultSidebarWanted = readSidebarPreference()
+let slotsRuntime: SlotsRuntime | undefined
+let panellistReady = false
+let mainReady = false
+let panellistDisposer: (() => void) | null = null
+let mainDisposer: (() => void) | null = null
+
+/**
+ * Mount or unmount the vault entries together: the sidebar icon addresses the
+ * panel and the keyed `main` entry renders it, so a half-mounted pair would
+ * either show a dead icon or leave an unreachable page. Disposing the `main`
+ * entry also makes the layout fall back to the conversation when it was active.
+ */
+function syncVaultSidebarEntry(): void {
+  const slots = slotsRuntime
+  if (slots === undefined || !panellistReady || !mainReady) return
+  if (vaultSidebarWanted) {
+    if (panellistDisposer !== null) return
+    panellistDisposer = slots.register(
+      { name: 'sidebar.panellist', id: VAULT_PANEL_ID, order: 30, label: () => '记忆库' },
+      (props: unknown) => React.createElement(VaultPanelIcon, props as { size?: number; active?: boolean }),
+    ) as () => void
+    mainDisposer = slots.register(
+      { name: 'main', key: VAULT_PANEL_ID },
+      () => React.createElement(MemoryVaultPage),
+    ) as () => void
+    return
+  }
+  if (panellistDisposer === null && mainDisposer === null) return
+  panellistDisposer?.()
+  mainDisposer?.()
+  panellistDisposer = null
+  mainDisposer = null
+}
+
+/** Apply the preference immediately (settings checkbox); the RPC persists it. */
+export function setVaultSidebarEntry(visible: boolean): void {
+  if (visible !== vaultSidebarWanted) {
+    vaultSidebarWanted = visible
+    writeSidebarPreference(visible)
+  }
+  syncVaultSidebarEntry()
+}
+
 export function apply(ctx: Context): void {
   const slots = ctx.get('slots') as SlotsRuntime | undefined
   if (slots === undefined) return
+  slotsRuntime = slots
   const style = document.createElement('style')
   style.dataset.plugin = '@nanmicoder/dsh-memory'
   style.dataset.pluginCss = '@nanmicoder/dsh-memory/MemorySettings.css'
@@ -818,17 +926,32 @@ export function apply(ctx: Context): void {
     { name: 'settings.section', id: 'dsh-memory', order: 30, label: '长期记忆' },
     () => React.createElement(MemorySettings),
   ))
-  // Vault page: the sidebar icon addresses the panel, the keyed `main` entry
-  // renders it. Both ids must stay in sync — the layout dispatches by id.
-  slots.inject('sidebar.panellist', () => slots.register(
-    { name: 'sidebar.panellist', id: VAULT_PANEL_ID, order: 30, label: () => '记忆库' },
-    (props: unknown) => React.createElement(VaultPanelIcon, props as { size?: number; active?: boolean }),
-  ))
-  slots.inject('main', () => slots.register(
-    { name: 'main', key: VAULT_PANEL_ID },
-    () => React.createElement(MemoryVaultPage),
-  ))
+  // Both declarations are needed before the pair can be mounted: register only
+  // once the slots exist, and re-check whenever the preference changes.
+  slots.inject('sidebar.panellist', () => {
+    panellistReady = true
+    syncVaultSidebarEntry()
+  })
+  slots.inject('main', () => {
+    mainReady = true
+    syncVaultSidebarEntry()
+  })
+  syncVaultSidebarEntry()
+  // Reconcile the instant-start mirror with the persisted config (another
+  // browser may have flipped it). A lightweight route: no vault directory walk.
+  void rpc('get-config').then(result => {
+    const config = result.config
+    if (typeof config !== 'object' || config === null) return
+    setVaultSidebarEntry((config as Record<string, unknown>).showVaultInSidebar !== false)
+  }).catch(() => {})
   ctx.effect(() => () => {
     style.remove()
+    panellistDisposer?.()
+    mainDisposer?.()
+    panellistDisposer = null
+    mainDisposer = null
+    slotsRuntime = undefined
+    panellistReady = false
+    mainReady = false
   })
 }

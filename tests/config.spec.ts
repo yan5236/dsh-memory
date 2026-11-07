@@ -30,6 +30,22 @@ describe('config: maxUnusedDays', () => {
   })
 })
 
+describe('config: showVaultInSidebar', () => {
+  it('defaults to showing the sidebar entry and resolves overrides', () => {
+    expect(DEFAULTS.showVaultInSidebar).toBe(true)
+    expect(resolveConfig({}).showVaultInSidebar).toBe(true)
+    expect(resolveConfig({ showVaultInSidebar: false }).showVaultInSidebar).toBe(false)
+    expect(resolveConfig({ showVaultInSidebar: true }, { showVaultInSidebar: false }).showVaultInSidebar).toBe(false)
+  })
+
+  it('clamps the toggle to a boolean', () => {
+    expect(clampOverrides({ showVaultInSidebar: false })).toEqual({ showVaultInSidebar: false })
+    expect(clampOverrides({ showVaultInSidebar: 'true' })).toEqual({ showVaultInSidebar: true })
+    expect(clampOverrides({ showVaultInSidebar: 0 })).toEqual({ showVaultInSidebar: false })
+    expect(clampOverrides({ showVaultInSidebar: 'nonsense' })).toEqual({ showVaultInSidebar: false })
+  })
+})
+
 describe('config: per-phase reasoning effort', () => {
   it('defaults both phases to empty (provider default) and resolves base/overrides', () => {
     expect(DEFAULTS.phase1ReasoningEffort).toBe('')

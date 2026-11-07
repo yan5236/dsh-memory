@@ -162,6 +162,13 @@ describe('registerRpc endpoint', () => {
     expect(JSON.parse(res.body)).toMatchObject({ root: root })
   })
 
+  it('serves a lightweight get-config for the sidebar-entry preference', async () => {
+    const { dispatch } = await harness()
+    const res = await dispatch(fakeRequest('POST', SAME_ORIGIN, JSON.stringify({ method: 'get-config' })))
+    expect(res.status).toBe(200)
+    expect(JSON.parse(res.body).config).toMatchObject({ showVaultInSidebar: true })
+  })
+
   it('writes a file for same-origin requests', async () => {
     const { files, dispatch } = await harness()
     const res = await dispatch(fakeRequest('POST', SAME_ORIGIN, JSON.stringify({

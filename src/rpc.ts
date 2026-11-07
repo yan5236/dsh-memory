@@ -280,6 +280,10 @@ export function registerRpc(webServer: WebServerRuntime, deps: RpcDeps): () => v
         let result: unknown
         if (method === 'get-state') {
           result = await statePayload(deps)
+        } else if (method === 'get-config') {
+          // Lightweight read for the client's sidebar-entry visibility: the full
+          // state payload walks the memory directory for stats on every page load.
+          result = { config: deps.config() }
         } else if (method === 'set-config') {
           deps.state.setOverrides(clampOverrides(args))
           result = await statePayload(deps)
