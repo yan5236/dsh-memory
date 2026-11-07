@@ -564,4 +564,27 @@ task_outcome: success
     expect(summary).toMatchObject({ failed: 1 })
     expect(h.calls).toHaveLength(1)
   })
+  it('retries once when the provider drops the stream, then succeeds', async () => {
+    const h = await harness([new Error('DeepSeek Messages stream ended before message_stop'), PHASE1_JSON('Recovered Session')])
+    h.headers.push(activeHeader('s1'))
+    h.setEvents('s1', [userMessage('一'), userMessage('二'), userMessage('三'), userMessage('四')])
+
+    const summary = await h.runner.run()
+    expect(summary).toMatchObject({ done: 1, failed: 0 })
+    expect(h.calls).toHaveLength(2)
+    expect(h.state.processedOf('s1')).toMatchObject({ status: 'done' })
+  })
+
+  it('keeps a transient failure retriable without spending the attempt budget', async () => {
+    const h = await harness([new Error('Internal Server Error (request_id: x)'), new Error('Internal Server Error (request_id: x)')])
+    h.headers.push(activeHeader('s1'))
+    h.setEvents('s1', [userMessage('一'), userMessage('二'), userMessage('三'), userMessage('四')])
+
+    const summary = await h.runner.run()
+    expect(summary).toMatchObject({ failed: 1 })
+    const claim = h.state.processedOf('s1')
+    expect(claim?.status).toBe('failed')
+    expect(claim?.transient).toBe(true)
+    expect(claim?.attempts).toBe(0)
+  })
 })

@@ -17,6 +17,11 @@ export interface SessionClaim {
   lastSeq?: number
   /** Number of rollout parts already written for this session. */
   parts?: number
+  /**
+   * Set when the last failure was a provider/transport blip: the attempt
+   * counter was rolled back and selection retries it on a short backoff.
+   */
+  transient?: boolean
 }
 
 /** Read-path usage recorded for one memory file (Codex usage_count/last_usage parity). */

@@ -254,6 +254,24 @@ export class MemoryStateStore {
     this.queueSave()
   }
 
+  /**
+   * Record a failure caused by the provider/transport rather than by the
+   * session content. The attempt counter is rolled back so an upstream blip
+   * never eats into the session's retry budget, and the claim is marked
+   * `transient` so selection retries it on a short backoff indefinitely.
+   */
+  claimFailedTransient(id: string, error: string): void {
+    const previous = this.state.processed[id]
+    this.state.processed[id] = {
+      status: 'failed',
+      at: this.now(),
+      attempts: Math.max(0, (previous?.attempts ?? 1) - 1),
+      error: error.slice(0, 500),
+      transient: true,
+    }
+    this.queueSave()
+  }
+
   get pendingConsolidation(): boolean {
     return this.state.pendingConsolidation
   }

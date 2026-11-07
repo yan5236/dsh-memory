@@ -5,7 +5,7 @@ import type { Config } from './config.js'
 import type { MemoryFiles } from './files.js'
 import type { LlmDirectoryRuntime, ModelRoute } from './llm.js'
 import {
-  collectResponse, effortLabel, extractJsonObject, generateOptions, LlmCallError,
+  collectResponseWithDeadline, effortLabel, extractJsonObject, generateOptions, isTransientError, LlmCallError,
   parseCallArgumentsDetailed, parseSections, repairJson, resolveReasoningEffort,
 } from './llm.js'
 import { sanitizeSlug } from './paths.js'
@@ -50,6 +50,9 @@ type ExtractOutcome = 'done' | 'noop' | 'failed' | 'unchanged'
  * model emitted broken JSON that the tolerant chain recovered; `text-*` means
  * the tool route failed and the plain-text fallback carried the session.
  */
+/** Wall-clock deadline for one extraction call; a stalled stream aborts here. */
+export const EXTRACTION_DEADLINE_MS = 150_000
+
 export type ExtractStrategy =
   | 'tool-call'
   | 'tool-call-repair'
@@ -68,6 +71,8 @@ interface ExtractResult {
   outcome: ExtractOutcome
   strategy: ExtractStrategy
   error?: string
+  /** True when the failure came from the provider/transport, not the content. */
+  transient?: boolean
 }
 
 /** Only parse-level failures justify falling back to the next strategy. */
@@ -151,7 +156,7 @@ export class Phase1Runner {
     let failed = 0
     let unchanged = 0
     let index = 0
-    const sessions: Array<{ id: string; outcome: ExtractOutcome; strategy: ExtractStrategy; error?: string }> = []
+    const sessions: Array<{ id: string; outcome: ExtractOutcome; strategy: ExtractStrategy; error?: string; transient?: boolean }> = []
     const workers = Array.from({ length: Math.max(1, cfg.extractionConcurrency) }, async () => {
       while (index < selection.candidates.length) {
         const header = selection.candidates[index++]!
@@ -161,6 +166,7 @@ export class Phase1Runner {
           outcome: result.outcome,
           strategy: result.strategy,
           ...(result.error === undefined ? {} : { error: result.error }),
+          ...(result.transient === undefined ? {} : { transient: result.transient }),
         })
         if (result.outcome === 'done') done += 1
         else if (result.outcome === 'noop') noop += 1
@@ -263,8 +269,11 @@ export class Phase1Runner {
       return { outcome: 'done', strategy: attempt.strategy }
     } catch (error: unknown) {
       const detail = `${messageOf(error)} (route=${route.provider}/${route.model})`
-      state.claimFailed(header.id, detail)
-      return { outcome: 'failed', strategy: 'none', error: detail.slice(0, 300) }
+      const transient = isTransientError(error)
+      // An upstream blip says nothing about this session: keep its retry budget.
+      if (transient) state.claimFailedTransient(header.id, detail)
+      else state.claimFailed(header.id, detail)
+      return { outcome: 'failed', strategy: 'none', error: detail.slice(0, 300), transient }
     }
   }
 
@@ -287,6 +296,12 @@ export class Phase1Runner {
     } catch (error: unknown) {
       if (messageOf(error).includes('truncated') && transcript.length > 15_000) {
         return await attempt(headTail(transcript, Math.floor(transcript.length / 2)))
+      }
+      // One immediate retry for provider blips: most dropped streams succeed on
+      // the second try, which avoids parking the session on a backoff entirely.
+      if (isTransientError(error)) {
+        await new Promise(resolve => setTimeout(resolve, 1_500))
+        return await attempt(transcript)
       }
       throw error
     }
@@ -330,9 +345,10 @@ export class Phase1Runner {
     delta: boolean,
     effort: string | undefined,
   ): Promise<ExtractAttempt> {
-    const response = await collectResponse(
+    const response = await collectResponseWithDeadline(
       this.deps.llm,
       generateOptions(route, PHASE1_SYSTEM, phase1User(this.meta(header), transcript, delta), cfg.phase1MaxTokens, undefined, [PHASE1_TOOL], effort),
+      EXTRACTION_DEADLINE_MS,
       80_000,
     )
     const toolCall = response.calls.find(call => call.name === 'memory_save')
@@ -361,9 +377,10 @@ export class Phase1Runner {
     delta: boolean,
     effort: string | undefined,
   ): Promise<ExtractAttempt> {
-    const response = await collectResponse(
+    const response = await collectResponseWithDeadline(
       this.deps.llm,
       generateOptions(route, PHASE1_TEXT_SYSTEM, phase1TextUser(this.meta(header), transcript, delta), cfg.phase1MaxTokens, undefined, undefined, effort),
+      EXTRACTION_DEADLINE_MS,
       80_000,
     )
     const sections = parseSections(response.text)

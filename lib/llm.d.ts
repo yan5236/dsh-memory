@@ -51,6 +51,14 @@ export declare function collectResponse(runtime: LlmRuntime, options: GenerateOp
 export declare function collectTextDetails(runtime: LlmRuntime, options: GenerateOptions, maxChars?: number): Promise<CollectedText>;
 /** Collect a full text response, failing on any abnormal finish including truncation. */
 export declare function collectText(runtime: LlmRuntime, options: GenerateOptions, maxChars?: number): Promise<string>;
+/** Whether an error is an environment/provider blip rather than bad content. */
+export declare function isTransientError(error: unknown): boolean;
+/**
+ * Collect a response under a hard wall-clock deadline. A provider that stalls
+ * mid-stream would otherwise wedge the whole pipeline, so the deadline aborts
+ * the request and reports a transient failure.
+ */
+export declare function collectResponseWithDeadline(runtime: LlmRuntime, options: GenerateOptions, timeoutMs: number, maxChars?: number): Promise<CollectedResponse>;
 /** Field names the Phase 1 extractor fills; also the anchors of the salvage parser. */
 export declare const EXTRACTION_KEYS: readonly ["raw_memory", "rollout_summary", "rollout_slug"];
 /** Which stage of the tolerant parse chain accepted a payload. */

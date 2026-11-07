@@ -58,6 +58,13 @@ export declare class MemoryStateStore {
     claimUnchanged(id: string, lastSeq: number): void;
     claimNoop(id: string): void;
     claimFailed(id: string, error: string): void;
+    /**
+     * Record a failure caused by the provider/transport rather than by the
+     * session content. The attempt counter is rolled back so an upstream blip
+     * never eats into the session's retry budget, and the claim is marked
+     * `transient` so selection retries it on a short backoff indefinitely.
+     */
+    claimFailedTransient(id: string, error: string): void;
     get pendingConsolidation(): boolean;
     setPendingConsolidation(value: boolean): void;
     get lastPhase2At(): number;

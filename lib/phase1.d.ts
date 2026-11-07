@@ -30,6 +30,8 @@ export interface Phase1Deps {
  * model emitted broken JSON that the tolerant chain recovered; `text-*` means
  * the tool route failed and the plain-text fallback carried the session.
  */
+/** Wall-clock deadline for one extraction call; a stalled stream aborts here. */
+export declare const EXTRACTION_DEADLINE_MS = 150000;
 export type ExtractStrategy = 'tool-call' | 'tool-call-repair' | 'tool-call-salvage' | 'text-json' | 'text-json-repair' | 'text-sections' | 'none';
 export declare class Phase1Runner {
     private readonly deps;
