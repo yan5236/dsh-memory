@@ -1,0 +1,180 @@
+{
+  "nodes": [
+    {
+      "id": "topic:1:demo-workflow",
+      "label": "示例主题 · 工作流",
+      "kind": "topic",
+      "path": "MEMORY.md",
+      "chars": 1200,
+      "at": 1735689600000,
+      "degree": 3,
+      "preview": "这里展示的是示例主题的摘要：用于预览记忆库云图，不包含任何真实记忆内容。"
+    },
+    {
+      "id": "topic:2:demo-projects",
+      "label": "示例主题 · 项目",
+      "kind": "topic",
+      "path": "MEMORY.md",
+      "chars": 860,
+      "at": 1735689600000,
+      "degree": 2,
+      "preview": "第二个示例主题，展示面板与节点详情之间的联动。"
+    },
+    {
+      "id": "summary:demo-session-alpha",
+      "label": "示例回顾：工作流 A",
+      "kind": "summary",
+      "path": "rollout_summaries/demo-session-alpha.md",
+      "chars": 2400,
+      "at": 1735776000000,
+      "degree": 3,
+      "preview": "一段示例回顾，展示节点在云图中的位置与关联。"
+    },
+    {
+      "id": "summary:demo-session-beta",
+      "label": "示例回顾：工作流 B",
+      "kind": "summary",
+      "path": "rollout_summaries/demo-session-beta.md",
+      "chars": 1800,
+      "at": 1735862400000,
+      "degree": 2,
+      "preview": "另一段示例回顾，用于展示引用边与联想边的区别。"
+    },
+    {
+      "id": "summary:demo-session-gamma",
+      "label": "示例回顾：工具链",
+      "kind": "summary",
+      "path": "rollout_summaries/demo-session-gamma.md",
+      "chars": 1100,
+      "at": 1735948800000,
+      "degree": 1,
+      "preview": "示例回顾：工具链，仅用于界面预览。"
+    },
+    {
+      "id": "summary:demo-session-delta",
+      "label": "示例回顾：排查记录",
+      "kind": "summary",
+      "path": "rollout_summaries/demo-session-delta.md",
+      "chars": 900,
+      "at": 1736035200000,
+      "degree": 1,
+      "preview": "示例回顾：排查记录，仅用于界面预览。"
+    },
+    {
+      "id": "skill:demo-deploy",
+      "label": "示例技能 · 部署",
+      "kind": "skill",
+      "path": "skills/demo-deploy/SKILL.md",
+      "chars": 700,
+      "at": 1736121600000,
+      "degree": 1,
+      "preview": "一段示例技能说明，展示绿色节点。"
+    },
+    {
+      "id": "skill:demo-review",
+      "label": "示例技能 · 审查",
+      "kind": "skill",
+      "path": "skills/demo-review/SKILL.md",
+      "chars": 640,
+      "at": 1736208000000,
+      "degree": 1,
+      "preview": "一段示例技能说明，展示绿色节点。"
+    },
+    {
+      "id": "note:demo-budget",
+      "label": "示例笔记 · 预算",
+      "kind": "note",
+      "path": "extensions/ad_hoc/notes/demo-budget.md",
+      "chars": 320,
+      "at": 1736294400000,
+      "degree": 1,
+      "preview": "一段示例笔记，展示黄色节点。"
+    },
+    {
+      "id": "note:demo-preference",
+      "label": "示例笔记 · 偏好",
+      "kind": "note",
+      "path": "extensions/ad_hoc/notes/demo-preference.md",
+      "chars": 280,
+      "at": 1736380800000,
+      "degree": 1,
+      "preview": "一段示例笔记，展示黄色节点。"
+    },
+    {
+      "id": "archive:demo-old-note",
+      "label": "示例归档 · 旧笔记",
+      "kind": "archive",
+      "path": "extensions/ad_hoc/archive/demo-old-note.md",
+      "chars": 480,
+      "at": 1736467200000,
+      "degree": 0,
+      "preview": "一段示例归档，默认隐藏在筛选之外。"
+    },
+    {
+      "id": "archive:demo-old-session",
+      "label": "示例归档 · 旧回顾",
+      "kind": "archive",
+      "path": "rollout_summaries/.retired/demo-old-session.md",
+      "chars": 520,
+      "at": 1736553600000,
+      "degree": 0,
+      "preview": "一段示例归档，默认隐藏在筛选之外。"
+    }
+  ],
+  "edges": [
+    {
+      "from": "topic:1:demo-workflow",
+      "to": "summary:demo-session-alpha",
+      "kind": "cite",
+      "weight": 2
+    },
+    {
+      "from": "topic:1:demo-workflow",
+      "to": "summary:demo-session-beta",
+      "kind": "cite",
+      "weight": 2
+    },
+    {
+      "from": "topic:2:demo-projects",
+      "to": "summary:demo-session-gamma",
+      "kind": "cite",
+      "weight": 2
+    },
+    {
+      "from": "summary:demo-session-alpha",
+      "to": "summary:demo-session-beta",
+      "kind": "relate",
+      "weight": 4
+    },
+    {
+      "from": "summary:demo-session-alpha",
+      "to": "skill:demo-deploy",
+      "kind": "relate",
+      "weight": 3
+    },
+    {
+      "from": "summary:demo-session-gamma",
+      "to": "skill:demo-review",
+      "kind": "relate",
+      "weight": 3
+    },
+    {
+      "from": "note:demo-budget",
+      "to": "topic:1:demo-workflow",
+      "kind": "relate",
+      "weight": 3
+    },
+    {
+      "from": "note:demo-preference",
+      "to": "topic:2:demo-projects",
+      "kind": "relate",
+      "weight": 2
+    }
+  ],
+  "stats": {
+    "nodes": 12,
+    "edges": 8,
+    "truncated": false,
+    "generatedAt": 1736640000000
+  }
+}
