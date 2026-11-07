@@ -1,3 +1,8 @@
 node_modules/
 *.tsbuildinfo
 .DS_Store
+
+# local visual evidence (regenerate with scripts/preview)
+preview/*.png
+preview/*-report.json
+preview/build/
