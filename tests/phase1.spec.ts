@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { afterEach, describe, expect, it } from 'vitest'
 import { MemoryStateStore } from '../src/bookkeeping.js'
 import { resolveConfig } from '../src/config.js'
@@ -23,6 +24,8 @@ interface Harness {
   headers: SessionHeaderLite[]
   setEvents: (id: string, events: unknown[]) => void
   clock: { value: number }
+  /** Every GenerateOptions the runner sent to the fake model. */
+  calls: GenerateOptions[]
 }
 
 async function harness(responses: Array<FakeResponse>): Promise<Harness> {
@@ -31,7 +34,7 @@ async function harness(responses: Array<FakeResponse>): Promise<Harness> {
   const state = new MemoryStateStore(() => facility)
   await state.init()
   const files = new MemoryFiles(root)
-  const { llm } = fakeLlm(responses)
+  const { llm, calls } = fakeLlm(responses)
   const events = new Map<string, unknown[]>()
   const headers: SessionHeaderLite[] = []
   const reader: SessionReader = {
@@ -60,6 +63,7 @@ async function harness(responses: Array<FakeResponse>): Promise<Harness> {
     headers,
     setEvents: (id, list) => events.set(id, list),
     clock,
+    calls,
   }
 }
 
@@ -198,6 +202,15 @@ describe('Phase1Runner', () => {
     expect(claim?.status).toBe('failed')
     expect(claim?.error).toContain('truncated')
     expect(claim?.error).toContain('route=mock/mock')
+
+    // The run log must explain why the session failed (300-char cap).
+    const logs = await h.files.listRunLogs()
+    const full = await h.files.readIfExists(`logs/${logs[0]!.name}`)
+    const parsed = JSON.parse(full!) as { detail: { sessions: Array<{ id: string; outcome: string; strategy: string; error?: string }> } }
+    expect(parsed.detail.sessions).toHaveLength(1)
+    expect(parsed.detail.sessions[0]).toMatchObject({ id: 's1', outcome: 'failed', strategy: 'none' })
+    expect(parsed.detail.sessions[0]?.error).toContain('truncated')
+    expect(parsed.detail.sessions[0]?.error?.length).toBeLessThanOrEqual(300)
   })
 
   const withSeq = (event: unknown, seq: number): unknown => ({ ...(event as object), seq })
@@ -345,12 +358,14 @@ describe('Phase1Runner', () => {
     expect(logs[0]?.outcome).toContain('done 2/2')
 
     const full = await h.files.readIfExists(`logs/${logs[0]!.name}`)
-    const parsed = JSON.parse(full!) as { detail: { summary: unknown; sessions: Array<{ id: string; outcome: string }> } }
+    const parsed = JSON.parse(full!) as { detail: { summary: unknown; sessions: Array<{ id: string; outcome: string; strategy: string; error?: string }> } }
     expect(parsed.detail.summary).toMatchObject({ selected: 2, done: 2 })
-    expect(parsed.detail.sessions).toEqual([
-      { id: 's1', outcome: 'done' },
-      { id: 's2', outcome: 'done' },
+    expect(parsed.detail.sessions).toMatchObject([
+      { id: 's1', outcome: 'done', strategy: 'text-json' },
+      { id: 's2', outcome: 'done', strategy: 'text-json' },
     ])
+    // The UI depends on the outcome text staying in this exact shape.
+    expect(logs[0]?.outcome).toMatch(/^done 2\/2 \(noop 0, unchanged 0, failed 0\)$/)
   })
 
   it('records the applied effort in the run log (default when unconfigured)', async () => {
@@ -422,5 +437,131 @@ describe('Phase1Runner', () => {
     const summary = await runner.run()
     expect(summary).toMatchObject({ done: 1 })
     expect(calls[0]?.reasoningEffort).toBeUndefined()
+  })
+
+  // Real failure shape from the field: the model wrote the markdown recap into
+  // the JSON string with raw newlines and unescaped quotes.
+  const BROKEN_TOOL_ARGS = '{"raw_memory":"description: 修复解析\ncwd: /work\nkeywords: repair\n\n### Task 1\n\ntask_outcome: success","rollout_summary":"# repaired "tool" call\n\nOutcome: success","rollout_slug":"repaired-args"}'
+
+  const TEXT_SECTIONS = (slug: string): string => `===ROLLOUT_SLUG===
+${slug}
+
+===ROLLOUT_SUMMARY===
+# text mode summary
+
+## Task 1: demo
+
+Outcome: success
+
+===RAW_MEMORY===
+description: text mode fallback
+cwd: /work
+keywords: text, fallback
+
+### Task 1: demo
+
+task_outcome: success
+`
+
+  it('repairs a broken tool call in place without a second model call', async () => {
+    const h = await harness([{ calls: [{ name: 'memory_save', arguments: BROKEN_TOOL_ARGS }] }])
+    h.headers.push(activeHeader('s1'))
+    h.setEvents('s1', [userMessage('一'), userMessage('二'), userMessage('三'), userMessage('四')])
+
+    const summary = await h.runner.run()
+    expect(summary).toMatchObject({ done: 1, failed: 0 })
+    expect(h.calls).toHaveLength(1)
+    expect(h.state.processedOf('s1')).toMatchObject({ status: 'done', slug: 'repaired-args' })
+    const rollout = await h.files.readIfExists('rollout_summaries/repaired-args.md')
+    expect(rollout).toContain('repaired "tool" call')
+
+    const logs = await h.files.listRunLogs()
+    const full = await h.files.readIfExists(`logs/${logs[0]!.name}`)
+    const parsed = JSON.parse(full!) as { detail: { sessions: Array<{ strategy: string }> } }
+    expect(parsed.detail.sessions[0]?.strategy).toBe('tool-call-repair')
+  })
+
+  it('sends the default 8192 output budget for extraction calls', async () => {
+    const h = await harness([PHASE1_JSON('budget-session')])
+    h.headers.push(activeHeader('s1'))
+    h.setEvents('s1', [userMessage('一'), userMessage('二'), userMessage('三'), userMessage('四')])
+
+    await h.runner.run()
+    expect(h.calls[0]?.maxTokens).toBe(8_192)
+  })
+
+  it('falls back to no-tool text mode when tool arguments stay unparseable', async () => {
+    const h = await harness([
+      { calls: [{ name: 'memory_save', arguments: 'this is not JSON at all' }] },
+      { text: TEXT_SECTIONS('fallback-session') },
+    ])
+    h.headers.push(activeHeader('s1'))
+    h.setEvents('s1', [userMessage('一'), userMessage('二'), userMessage('三'), userMessage('四')])
+
+    const summary = await h.runner.run()
+    expect(summary).toMatchObject({ done: 1, failed: 0 })
+    expect(h.state.processedOf('s1')).toMatchObject({ status: 'done', slug: 'fallback-session' })
+    expect(await h.files.readIfExists('rollout_summaries/fallback-session.md')).toContain('# text mode summary')
+    expect(await h.files.readIfExists('raw_memories.md')).toContain('keywords: text, fallback')
+
+    // Second call carries no tools at all, so the model cannot break JSON again.
+    expect(h.calls).toHaveLength(2)
+    expect(h.calls[0]?.tools?.length).toBeGreaterThan(0)
+    expect(h.calls[1]?.tools).toBeUndefined()
+
+    const logs = await h.files.listRunLogs()
+    const full = await h.files.readIfExists(`logs/${logs[0]!.name}`)
+    const parsed = JSON.parse(full!) as { detail: { sessions: Array<{ strategy: string }> } }
+    expect(parsed.detail.sessions[0]?.strategy).toBe('text-sections')
+  })
+
+  it('halves the transcript for the text-mode strategy too', async () => {
+    const h = await harness([
+      { calls: [{ name: 'memory_save', arguments: 'not json' }] },
+      { text: TEXT_SECTIONS('cut-off'), truncated: true },
+      { calls: [{ name: 'memory_save', arguments: JSON.stringify({
+        raw_memory: 'description: halved ok\ncwd: /work\nkeywords: halved\n\n### Task 1\n\ntask_outcome: success\n',
+        rollout_summary: '# halved\n\nOutcome: success\n',
+        rollout_slug: 'halved-session',
+      }) }] },
+    ])
+    h.headers.push(activeHeader('s1'))
+    h.setEvents('s1', Array.from({ length: 20 }, (_, index) => userMessage(`第${index}条：${'内容'.repeat(450)}`)))
+
+    const summary = await h.runner.run()
+    expect(summary).toMatchObject({ done: 1, failed: 0 })
+    expect(h.state.processedOf('s1')).toMatchObject({ status: 'done', slug: 'halved-session' })
+    expect(h.calls).toHaveLength(3)
+    // The replay carries a strictly shorter transcript than the first attempt.
+    const firstUser = JSON.stringify(h.calls[0]?.messages)
+    const replayUser = JSON.stringify(h.calls[2]?.messages)
+    expect(replayUser.length).toBeLessThan(firstUser.length)
+  })
+
+  it('records a composite failure when both strategies fail', async () => {
+    const h = await harness([
+      { calls: [{ name: 'memory_save', arguments: 'not json' }] },
+      { text: '抱歉，我无法提取。' },
+    ])
+    h.headers.push(activeHeader('s1'))
+    h.setEvents('s1', [userMessage('一'), userMessage('二'), userMessage('三'), userMessage('四')])
+
+    const summary = await h.runner.run()
+    expect(summary).toMatchObject({ failed: 1 })
+    const claim = h.state.processedOf('s1')
+    expect(claim?.status).toBe('failed')
+    expect(claim?.error).toContain('tool-call extraction failed')
+    expect(claim?.error).toContain('text-mode extraction failed')
+    expect(claim?.error).toContain('route=mock/mock')
+  })
+
+  it('does not spend a fallback call on transport errors', async () => {
+    const h = await harness([new Error('llm down'), PHASE1_JSON('unused')])
+    h.headers.push(activeHeader('s1'))
+    h.setEvents('s1', [userMessage('一'), userMessage('二'), userMessage('三'), userMessage('四')])
+
+    const summary = await h.runner.run()
+    expect(summary).toMatchObject({ failed: 1 })
+    expect(h.calls).toHaveLength(1)
   })
 })

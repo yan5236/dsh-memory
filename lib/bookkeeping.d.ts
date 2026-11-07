@@ -1,6 +1,6 @@
 /** Durable bookkeeping through the storage hub KV backend: claims, cooldowns, pending flags. */
 import type { Config } from './config.js';
-import type { MemoryState, SessionClaim } from './types.js';
+import { type MemoryState, type SessionClaim } from './types.js';
 /** Structural slice of the storage hub KV unit the plugin needs. */
 export interface KvUnitLike {
     loadAll(): Promise<{
@@ -38,6 +38,14 @@ export declare class MemoryStateStore {
     storageError: string;
     constructor(getKv: () => KvFacilityLike | undefined, now?: () => number);
     init(): Promise<void>;
+    /**
+     * Re-queue every claim that failed under an older extractor version so the
+     * improved parser gets another chance, then stamp the current version.
+     * Returns the number of released claims (0 when already up to date).
+     */
+    upgradeExtractorVersion(version?: number): number;
+    /** Extractor version the current claims were produced with. */
+    get extractorVersion(): number;
     /** Recover claims interrupted by a restart, mirroring Codex lease expiry. */
     private recoverOrphans;
     private openUnit;

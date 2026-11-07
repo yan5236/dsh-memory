@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>记忆库 · 3D 云图预览</title>
+<style>
+  :root{
+    color-scheme: dark;
+    --bg:#14161c;
+    --panel:#181b22;
+    --line:rgba(255,255,255,.08);
+    --text:#e8ecf6;
+    --text-2:#a8b0c0;
+    --text-3:#79808f;
+    --brand:#4f7cff;
+    --warn:#e0a33e;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
+    font-family:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;}
+  .mv{display:flex;flex-direction:column;height:100%;min-height:0;overflow:hidden}
+  .mv-head{display:flex;align-items:center;gap:12px;padding:0 18px;min-height:54px;border-bottom:1px solid var(--line)}
+  .mv-brand{display:flex;flex-direction:column;gap:1px}
+  .mv-brand b{font-size:14px;font-weight:600;letter-spacing:.3px;line-height:20px}
+  .mv-brand span{font-size:10.5px;line-height:14px;color:var(--text-3);white-space:nowrap}
+  .mv-chips{display:flex;align-items:center;gap:6px;min-width:0}
+  .mv-chip{display:inline-flex;align-items:center;gap:6px;height:25px;padding:0 9px;border-radius:13px;
+    border:1px solid var(--line);background:transparent;color:var(--text-3);font-size:11.5px;line-height:1;cursor:pointer;white-space:nowrap}
+  .mv-chip.on{color:var(--text);border-color:rgba(255,255,255,.16);background:rgba(79,124,255,.16)}
+  .mv-chip i{width:6px;height:6px;border-radius:50%;display:inline-block}
+  .mv-chip b{font-weight:600;font-size:10.5px;color:var(--text-3)}
+  .mv-chip.on b{color:var(--text-2)}
+  .mv-search{position:relative;display:flex;align-items:center;flex:0 1 210px}
+  .mv-search input{width:100%;height:28px;border-radius:14px;border:1px solid var(--line);background:transparent;
+    color:var(--text);font:inherit;font-size:12px;padding:0 10px 0 28px;outline:none}
+  .mv-search svg{position:absolute;left:9px;color:var(--text-3)}
+  .mv-actions{margin-left:auto;display:flex;gap:8px;align-items:center}
+  .mv-seg{display:inline-flex;align-items:center;height:26px;padding:2px;border-radius:13px;border:1px solid var(--line)}
+  .mv-seg button{height:22px;min-width:34px;border:none;border-radius:11px;background:transparent;color:var(--text-3);font:inherit;font-size:11px;cursor:pointer}
+  .mv-seg button.on{background:rgba(79,124,255,.3);color:var(--text);font-weight:500}
+  .mv-btn{height:28px;padding:0 12px;border-radius:14px;font:inherit;font-size:12px;display:inline-flex;
+    align-items:center;gap:6px;cursor:pointer;border:1px solid var(--line);background:transparent;color:var(--text-2)}
+  .mv-btn.icon{width:28px;padding:0;justify-content:center}
+  .mv-btn.primary{background:var(--brand);border-color:transparent;color:#fff;font-weight:500}
+  .mv-body{flex:1;display:flex;min-height:0}
+  .mv-cloud{position:relative;flex:1;min-width:0;overflow:hidden;
+    background:radial-gradient(120% 100% at 50% -12%,rgba(98,124,255,.14),transparent 62%),
+               radial-gradient(90% 80% at 88% 110%,rgba(140,90,255,.10),transparent 58%),var(--panel)}
+  .mv-cloud canvas{display:block;width:100%;height:100%}
+  .mv-hint{position:absolute;left:16px;bottom:11px;font-size:10.5px;color:var(--text-3);pointer-events:none}
+  .mv-count{position:absolute;right:14px;bottom:11px;font-size:10.5px;color:var(--text-3);
+    font-variant-numeric:tabular-nums;pointer-events:none}
+  .mv-side{flex:0 0 356px;width:356px;display:flex;flex-direction:column;min-height:0;border-left:1px solid var(--line)}
+  .mv-side-head{display:flex;align-items:flex-start;gap:8px;padding:16px 16px 10px}
+  .mv-badge{display:inline-flex;align-items:center;height:19px;padding:0 8px;border-radius:10px;font-size:10.5px;
+    letter-spacing:.3px;border:1px solid var(--line);color:var(--text-3)}
+  .mv-close{margin-left:auto;width:24px;height:24px;border-radius:12px;border:none;background:transparent;
+    color:var(--text-3);cursor:pointer}
+  .mv-side-body{flex:1;overflow-y:auto;padding:0 16px 12px;display:flex;flex-direction:column;gap:14px}
+  .mv-title{margin:0;font-size:14.5px;line-height:22px;font-weight:600}
+  .mv-cap{font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--text-3)}
+  .mv-path{font-family:ui-monospace,Consolas,monospace;font-size:11px;line-height:17px;color:var(--text-3);
+    padding:7px 9px;border-radius:8px;border:1px solid var(--line);background:rgba(0,0,0,.16);word-break:break-all}
+  .mv-meta{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+  .mv-meta div{display:flex;flex-direction:column;gap:1px}
+  .mv-meta b{font-size:13px;font-weight:600;font-variant-numeric:tabular-nums}
+  .mv-meta span{font-size:10px;color:var(--text-3)}
+  .mv-preview{margin:0;font-size:12.5px;line-height:20px;color:var(--text-2);max-height:120px;overflow:hidden;
+    -webkit-mask-image:linear-gradient(180deg,#000 70%,transparent)}
+  .mv-rel{display:flex;flex-direction:column;gap:3px}
+  .mv-relrow{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:8px;border:1px solid transparent;
+    background:transparent;width:100%;text-align:left;font:inherit;color:var(--text-2);cursor:pointer}
+  .mv-relrow:hover{background:rgba(255,255,255,.05);border-color:var(--line)}
+  .mv-relrow i{width:6px;height:6px;border-radius:50%}
+  .mv-relrow span{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+  .mv-relrow em{font-style:normal;font-size:9.5px;color:var(--text-3)}
+  .mv-side-foot{padding:12px 16px 14px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:8px}
+  .mv-btn.full{width:100%;height:34px;border-radius:17px;font-size:13px;justify-content:center}
+  .mv-status{font-size:10.5px;color:var(--text-3);display:flex;gap:6px;align-items:center}
+</style>
+</head>
+<body>
+<div class="mv">
+  <div class="mv-head">
+    <div class="mv-brand"><b>记忆库</b><span id="sub">…</span></div>
+    <div class="mv-chips" id="chips"></div>
+    <label class="mv-search">
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="4.6" stroke="currentColor" stroke-width="1.4"/><path d="M10.6 10.6 14 14" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+      <input id="q" placeholder="搜索记忆…" spellcheck="false" />
+    </label>
+    <div class="mv-actions">
+      <button class="mv-btn" id="refresh">刷新</button>
+      <div class="mv-seg"><button id="mode3d" class="on">3D</button><button id="mode2d">2D</button></div>
+      <button class="mv-btn icon" id="relayout" title="重新布局">⟳</button>
+      <button class="mv-btn icon" title="收起详情">▭</button>
+    </div>
+  </div>
+  <div class="mv-body">
+    <div class="mv-cloud">
+      <canvas id="cloud"></canvas>
+      <div class="mv-hint">拖动旋转 · 滚轮缩放 · 单击查看 · 双击复位</div>
+      <div class="mv-count" id="count"></div>
+    </div>
+    <div class="mv-side">
+      <div class="mv-side-head">
+        <span class="mv-badge" id="badge">记忆库</span>
+        <button class="mv-close" id="close">✕</button>
+      </div>
+      <div class="mv-side-body">
+        <h2 class="mv-title" id="title">点击云图里的节点</h2>
+        <div><div class="mv-cap" style="margin-bottom:5px">文件</div><div class="mv-path" id="path">—</div></div>
+        <div class="mv-meta">
+          <div><b id="chars">—</b><span>体积</span></div>
+          <div><b id="when">—</b><span>更新</span></div>
+          <div><b id="degree">—</b><span>关联</span></div>
+        </div>
+        <div><div class="mv-cap" style="margin-bottom:5px">摘要</div><p class="mv-preview" id="preview">选中节点后显示真实摘要。</p></div>
+        <div><div class="mv-cap" style="margin-bottom:6px" id="relcap">关联</div><div class="mv-rel" id="rel"></div></div>
+      </div>
+      <div class="mv-side-foot">
+        <button class="mv-btn primary full" id="edit">编辑这份记忆</button>
+        <div class="mv-status"><span>上次整理：3 小时前</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+<script type="module">
+  import { MemoryGraph, KIND_COLOR, KIND_LABEL } from './build/graph-canvas.js'
+  const KINDS = ['topic', 'summary', 'skill', 'note', 'archive']
+  const enabled = new Set(['topic', 'summary', 'skill', 'note'])
+  const graph = new MemoryGraph(document.getElementById('cloud'), { onSelect: id => render(id) })
+  let data = { nodes: [], edges: [] }
+  const byId = new Map()
+
+  const chips = document.getElementById('chips')
+  function renderChips() {
+    chips.innerHTML = ''
+    for (const kind of KINDS) {
+      const count = data.nodes.filter(n => n.kind === kind).length
+      if (count === 0 && kind === 'archive') continue
+      const button = document.createElement('button')
+      button.className = 'mv-chip ' + (enabled.has(kind) ? 'on' : '')
+      button.innerHTML = `<i style="background:${KIND_COLOR[kind]}"></i>${KIND_LABEL[kind]}<b>&nbsp;${count}</b>`
+      button.onclick = () => {
+        if (enabled.has(kind)) enabled.delete(kind); else enabled.add(kind)
+        graph.setVisibleKinds(enabled)
+        renderChips()
+        updateCount()
+      }
+      chips.appendChild(button)
+    }
+  }
+  function updateCount() {
+    document.getElementById('count').textContent =
+      `${enabled.size} 类 · ${data.nodes.filter(n => enabled.has(n.kind)).length} 节点`
+  }
+
+  function render(id) {
+    const node = id ? byId.get(id) : null
+    document.getElementById('badge').textContent = node ? KIND_LABEL[node.kind] : '记忆库'
+    document.getElementById('title').textContent = node ? node.label : '点击云图里的节点'
+    document.getElementById('path').textContent = node ? node.path : '—'
+    document.getElementById('chars').textContent = node ? (node.chars > 1024 ? (node.chars/1024).toFixed(1) + 'K' : node.chars + ' 字') : '—'
+    document.getElementById('degree').textContent = node ? String(node.degree) : '—'
+    document.getElementById('when').textContent = node ? '刚刚' : '—'
+    document.getElementById('preview').textContent = node ? (node.preview || '（暂无摘要）') : '选中节点后显示真实摘要。'
+    const rel = document.getElementById('rel')
+    rel.innerHTML = ''
+    if (!node) { document.getElementById('relcap').textContent = '关联'; return }
+    const rows = []
+    for (const edge of data.edges) {
+      if (edge.from === node.id) rows.push({ node: byId.get(edge.to), kind: edge.kind })
+      else if (edge.to === node.id) rows.push({ node: byId.get(edge.from), kind: edge.kind })
+    }
+    document.getElementById('relcap').textContent = `关联 · ${rows.length}`
+    for (const row of rows.slice(0, 12)) {
+      if (!row.node) continue
+      const button = document.createElement('button')
+      button.className = 'mv-relrow'
+      button.innerHTML = `<i style="background:${KIND_COLOR[row.node.kind]}"></i><span>${row.node.label}</span><em>${row.kind === 'cite' ? '引用' : '相近'}</em>`
+      button.onclick = () => graph.setSelected(row.node.id)
+      rel.appendChild(button)
+    }
+  }
+
+  data = await (await fetch('./fixture-graph.json')).json()
+  for (const node of data.nodes) byId.set(node.id, node)
+  document.getElementById('sub').textContent = `${data.nodes.length} 个节点 · ${data.edges.length} 条关联`
+  renderChips(); updateCount()
+  graph.setData(data); graph.setVisibleKinds(enabled)
+  // Preselect the highest-degree topic so the first screenshot shows a real inspection.
+  const first = data.nodes.find(n => n.kind === 'topic') ?? data.nodes[0]
+  if (first) graph.setSelected(first.id)
+  render(first ? first.id : null)
+
+  document.getElementById('mode3d').onclick = () => { graph.setMode('3d'); document.getElementById('mode3d').classList.add('on'); document.getElementById('mode2d').classList.remove('on') }
+  document.getElementById('mode2d').onclick = () => { graph.setMode('2d'); document.getElementById('mode2d').classList.add('on'); document.getElementById('mode3d').classList.remove('on') }
+  document.getElementById('q').oninput = (event) => graph.setSearch(event.target.value)
+  document.getElementById('relayout').onclick = () => graph.relayout()
+  document.getElementById('refresh').onclick = () => location.reload()
+  document.getElementById('close').onclick = () => { graph.setSelected(null); render(null) }
+</script>
+</body>
+</html>

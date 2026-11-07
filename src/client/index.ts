@@ -2,10 +2,21 @@
 
 import * as React from 'react'
 import type { Context } from '@deepseek-ai/cordis'
+import { MemoryVaultPage, PANEL_ID as VAULT_PANEL_ID, VaultPanelIcon } from './memory-vault.js'
+
+interface SlotRegisterOptions {
+  name: string
+  /** Cell id for list slots (`settings.section`, `sidebar.panellist`). */
+  id?: string
+  /** Cell key for keyed slots (`main`). */
+  key?: string
+  order?: number
+  label?: string | (() => string)
+}
 
 interface SlotsRuntime {
   inject(name: string, callback: () => unknown): void
-  register(options: { name: string; id: string; order: number; label: string }, render: (props: unknown) => React.ReactNode): unknown
+  register(options: SlotRegisterOptions, render: (props: unknown) => React.ReactNode): unknown
 }
 
 interface ProviderEntry {
@@ -76,7 +87,7 @@ const CSS = [
   '.dm-section{box-sizing:border-box;max-width:760px;color:var(--dsw-alias-label-primary);flex-direction:column;gap:12px;display:flex}',
   '.dm-title{color:var(--dsw-alias-label-primary);margin:0;font-size:16px;font-weight:500;line-height:24px}',
   '.dm-intro{color:var(--dsw-alias-label-tertiary);margin:0;font-size:14px;line-height:22px}',
-  '.dm-dimmed{color:var(--dsw-alias-label-dimmed);margin:0;font-size:12px;line-height:18px}',
+  '.dm-dimmed{color:var(--dsw-alias-label-tertiary);margin:0;font-size:12px;line-height:18px}',
   '.dm-error{color:var(--dsw-alias-state-error-primary);margin:0;font-size:12px;line-height:18px}',
   '.dm-ok{color:var(--dsw-alias-state-success-primary);margin:0;font-size:12px;line-height:18px}',
   '.dm-warn{color:var(--dsw-alias-state-warn-label);margin:0;font-size:12px;line-height:18px}',
@@ -96,8 +107,8 @@ const CSS = [
   '.dm-check{align-items:center;gap:8px;color:var(--dsw-alias-label-primary);font-size:14px;line-height:22px;display:flex;cursor:pointer}',
   '.dm-check input{accent-color:var(--dsw-alias-brand-primary);margin:0}',
   '.dm-btn{box-sizing:border-box;height:34px;font:inherit;cursor:pointer;border:none;border-radius:17px;justify-content:center;align-items:center;gap:4px;padding:0 14px;font-size:14px;line-height:22px;display:inline-flex}',
-  '.dm-btn.primary{background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground)}',
-  '.dm-btn.primary:hover:not(:disabled){background:var(--dsw-alias-button-primary-fill-hover)}',
+  '.dm-btn.primary{background:#4f7cff;color:#ffffff}',
+  '.dm-btn.primary:hover:not(:disabled){background:#5f89ff}',
   '.dm-btn.secondary{border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary);background:transparent}',
   '.dm-btn.secondary:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}',
   '.dm-btn:disabled{opacity:.5;cursor:default}',
@@ -128,7 +139,7 @@ const CSS = [
   '.dm-editfoot{display:flex;align-items:center;gap:10px;padding:12px 16px;flex-wrap:wrap}',
   '.dm-btn.danger{border:1px solid var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary);background:transparent}',
   '.dm-btn.danger:hover:not(:disabled){background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 12%,transparent)}',
-  '.dm-btn.armed{border:1px solid var(--dsw-alias-state-error-primary);color:var(--dsw-alias-label-primary-foreground);background:var(--dsw-alias-state-error-primary)}',
+  '.dm-btn.armed{border:1px solid var(--dsw-alias-state-error-primary);color:#ffffff;background:var(--dsw-alias-state-error-primary)}',
 ].join('')
 
 const rpc = async (method: string, args: Record<string, unknown> = {}): Promise<Record<string, unknown>> => {
@@ -793,7 +804,7 @@ function MemorySettings(): React.ReactNode {
   )
 }
 
-export const inject: string[] = []
+export const inject: string[] = ['slots']
 
 export function apply(ctx: Context): void {
   const slots = ctx.get('slots') as SlotsRuntime | undefined
@@ -806,6 +817,16 @@ export function apply(ctx: Context): void {
   slots.inject('settings.section', () => slots.register(
     { name: 'settings.section', id: 'dsh-memory', order: 30, label: '长期记忆' },
     () => React.createElement(MemorySettings),
+  ))
+  // Vault page: the sidebar icon addresses the panel, the keyed `main` entry
+  // renders it. Both ids must stay in sync — the layout dispatches by id.
+  slots.inject('sidebar.panellist', () => slots.register(
+    { name: 'sidebar.panellist', id: VAULT_PANEL_ID, order: 30, label: () => '记忆库' },
+    (props: unknown) => React.createElement(VaultPanelIcon, props as { size?: number; active?: boolean }),
+  ))
+  slots.inject('main', () => slots.register(
+    { name: 'main', key: VAULT_PANEL_ID },
+    () => React.createElement(MemoryVaultPage),
   ))
   ctx.effect(() => () => {
     style.remove()

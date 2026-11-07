@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { MemoryStateStore } from '../src/bookkeeping.js'
+import { EXTRACTOR_VERSION } from '../src/types.js'
 import { fakeKv } from './helpers.js'
 
 describe('MemoryStateStore', () => {
@@ -210,6 +211,98 @@ describe('MemoryStateStore', () => {
     expect(store.nextAutoRetryAt).toBe(4000 + 60_000)
     store.resetPhase2Failures()
     expect(store.phase2Failures).toBe(0)
+    await store.dispose()
+  })
+
+  it('re-queues claims failed by an older extractor version on init', async () => {
+    const { facility, records } = fakeKv()
+    records.set('main', {
+      v: 1,
+      processed: {
+        broken: { status: 'failed', at: 5, attempts: 3, error: 'tool call "memory_save" arguments are not valid JSON' },
+        good: { status: 'done', at: 6, attempts: 1, slug: 'kept-slug' },
+        empty: { status: 'noop', at: 7, attempts: 1 },
+      },
+      lastPhase1At: 0,
+      lastPhase2At: 0,
+      pendingConsolidation: false,
+      overrides: {},
+      extractorVersion: EXTRACTOR_VERSION - 1,
+    })
+    const store = new MemoryStateStore(() => facility)
+    await store.init()
+
+    // The old-parser failure is released so the improved parser retries it.
+    expect(store.processedOf('broken')).toBeUndefined()
+    expect(store.processedOf('good')).toMatchObject({ status: 'done', slug: 'kept-slug' })
+    expect(store.processedOf('empty')?.status).toBe('noop')
+    expect(store.extractorVersion).toBe(EXTRACTOR_VERSION)
+
+    await store.flush()
+    const persisted = records.get('main') as { extractorVersion?: number; processed: Record<string, unknown> }
+    expect(persisted.extractorVersion).toBe(EXTRACTOR_VERSION)
+    expect(persisted.processed.broken).toBeUndefined()
+    await store.dispose()
+  })
+
+  it('keeps failed claims produced by the current extractor version', async () => {
+    const { facility, records } = fakeKv()
+    records.set('main', {
+      v: 1,
+      processed: { broken: { status: 'failed', at: 5, attempts: 1, error: 'boom' } },
+      lastPhase1At: 0,
+      lastPhase2At: 0,
+      pendingConsolidation: false,
+      overrides: {},
+      extractorVersion: EXTRACTOR_VERSION,
+    })
+    const store = new MemoryStateStore(() => facility)
+    await store.init()
+    expect(store.processedOf('broken')).toMatchObject({ status: 'failed', error: 'boom' })
+    expect(store.extractorVersion).toBe(EXTRACTOR_VERSION)
+    await store.dispose()
+  })
+
+  it('reports how many claims an extractor upgrade released and is idempotent', async () => {
+    const { facility } = fakeKv()
+    const store = new MemoryStateStore(() => facility)
+    await store.init()
+    expect(store.extractorVersion).toBe(EXTRACTOR_VERSION)
+
+    store.claimRunning('a')
+    store.claimFailed('a', 'boom')
+    store.claimRunning('b')
+    store.claimFailed('b', 'boom')
+    store.claimDone('c', 'slug')
+
+    expect(store.upgradeExtractorVersion(EXTRACTOR_VERSION + 1)).toBe(2)
+    expect(store.extractorVersion).toBe(EXTRACTOR_VERSION + 1)
+    expect(store.processedOf('a')).toBeUndefined()
+    expect(store.processedOf('c')).toMatchObject({ status: 'done' })
+    expect(store.upgradeExtractorVersion(EXTRACTOR_VERSION + 1)).toBe(0)
+    await store.dispose()
+  })
+
+  it('releases old-parser failures before recovering restart orphans', async () => {
+    const { facility, records } = fakeKv()
+    records.set('main', {
+      v: 1,
+      processed: {
+        oldFailure: { status: 'failed', at: 1, attempts: 3, error: 'arguments are not valid JSON' },
+        orphan: { status: 'running', at: Date.now() - 60 * 60_000, attempts: 1 },
+      },
+      lastPhase1At: 0,
+      lastPhase2At: 0,
+      pendingConsolidation: false,
+      overrides: {},
+    })
+    const store = new MemoryStateStore(() => facility)
+    await store.init()
+    // Pre-existing failures belong to the old parser → released.
+    expect(store.processedOf('oldFailure')).toBeUndefined()
+    // The interrupted lease is this run's concern → failed, retried via backoff.
+    expect(store.processedOf('orphan')).toMatchObject({ status: 'failed', error: 'interrupted by restart' })
+    expect(store.extractorVersion).toBe(EXTRACTOR_VERSION)
     await store.dispose()
   })
 })

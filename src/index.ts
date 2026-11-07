@@ -32,12 +32,19 @@ export { Config, DEFAULTS, clampOverrides, OVERRIDABLE_KEYS, resolveConfig } fro
 export type { Config as MemoryConfig, OverridableKey } from './config.js'
 export { MemoryStateStore, type KvFacilityLike, type KvUnitLike } from './bookkeeping.js'
 export { MemoryFiles, ensureSummaryV1 } from './files.js'
+export { buildMemoryGraph, parseTopics, pathOfNode, tokenize } from './graph.js'
+export type { GraphEdge, GraphNode, GraphNodeKind, GraphOptions, MemoryGraphPayload } from './graph.js'
 export { MemoryInjection, buildSectionText, GUIDE_ORDER, type SystemPromptRuntime } from './inject.js'
 export {
-  collectResponse, collectText, collectTextDetails, effortLabel, extractJsonObject, generateOptions,
-  LlmCallError, parseCallArguments, parseFencedBlocks, pickBlock, resolveReasoningEffort, resolveRoute, stripFences,
+  collectResponse, collectText, collectTextDetails, effortLabel, EXTRACTION_KEYS, extractJsonObject, generateOptions,
+  LlmCallError, parseCallArguments, parseCallArgumentsDetailed, parseFencedBlocks, parseObjectLoose,
+  parseSections, pickBlock, repairJson, resolveReasoningEffort, resolveRoute, salvageFields, stripFences,
+  unescapeJsonString,
 } from './llm.js'
-export type { CollectedCall, CollectedResponse, CollectedText, LlmDirectoryRuntime, LlmRuntime, ModelRoute } from './llm.js'
+export type {
+  CollectedCall, CollectedResponse, CollectedText, LlmDirectoryRuntime, LlmRuntime, ModelRoute, ParsedObject,
+  ParsedSections,
+} from './llm.js'
 export { defaultMemoryRoot, isWithin, resolveMemoryRoot, sanitizeSlug } from './paths.js'
 export { Phase1Runner, type Phase1Deps, type Phase1Summary } from './phase1.js'
 export { Phase2Runner, type Phase2Deps, type Phase2Outcome } from './phase2.js'

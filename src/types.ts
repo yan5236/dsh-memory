@@ -26,6 +26,13 @@ export interface UsageRecord {
 }
 
 /**
+ * Version of the Phase 1 extraction + parse contract. Bump it whenever the
+ * parser gets materially more tolerant: claims failed under an older version
+ * are released on init so the improved parser retries them.
+ */
+export const EXTRACTOR_VERSION = 2
+
+/**
  * Durable plugin state persisted through the storage hub KV backend.
  *
  * `usage` and `retiredAt` are optional at load time so archives written by
@@ -40,6 +47,8 @@ export interface MemoryState {
   phase2Error?: string
   pendingConsolidation: boolean
   overrides: Partial<Config>
+  /** Extractor/parser version that produced the current claims (absent in legacy archives). */
+  extractorVersion?: number
   /** Per-file read-path usage: relative memory path → usage record. */
   usage?: Record<string, UsageRecord>
   /** Retired rollout summary slug → epoch ms when it was retired. */

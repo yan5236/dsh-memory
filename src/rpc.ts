@@ -4,6 +4,7 @@ import type { MemoryStateStore } from './bookkeeping.js'
 import type { Config } from './config.js'
 import { clampOverrides } from './config.js'
 import type { MemoryFiles } from './files.js'
+import { buildMemoryGraph } from './graph.js'
 import type { LlmDirectoryRuntime, ModelRoute } from './llm.js'
 import type { Phase1Runner } from './phase1.js'
 import type { Phase2Runner, Phase2Outcome } from './phase2.js'
@@ -295,6 +296,9 @@ export function registerRpc(webServer: WebServerRuntime, deps: RpcDeps): () => v
           result = { state: await statePayload(deps) }
         } else if (method === 'list-files') {
           result = { files: await deps.files.listTree(typeof args.path === 'string' ? args.path : '') }
+        } else if (method === 'get-graph') {
+          // The vault page's 3D cloud: nodes plus citation/affinity edges.
+          result = await buildMemoryGraph(deps.files)
         } else if (method === 'get-logs') {
           const limit = typeof args.limit === 'number' ? Math.max(1, Math.min(50, Math.floor(args.limit))) : 20
           result = { logs: await deps.files.listRunLogs(limit) }

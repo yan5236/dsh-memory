@@ -24,6 +24,13 @@ export interface Phase1Deps {
     /** Injectable clock for tests. */
     now?: () => number;
 }
+/**
+ * Which rung of the extraction ladder produced the fields, for run-log
+ * diagnosis: `tool-call` is the healthy path; `-repair`/`-salvage` mean the
+ * model emitted broken JSON that the tolerant chain recovered; `text-*` means
+ * the tool route failed and the plain-text fallback carried the session.
+ */
+export type ExtractStrategy = 'tool-call' | 'tool-call-repair' | 'tool-call-salvage' | 'text-json' | 'text-json-repair' | 'text-sections' | 'none';
 export declare class Phase1Runner {
     private readonly deps;
     private running;
@@ -35,10 +42,23 @@ export declare class Phase1Runner {
     private execute;
     private extractOne;
     /**
-     * One extraction call: structured tool call preferred, text-JSON fallback,
-     * and a single halved-input retry when the output was truncated.
+     * Extraction ladder: ① structured tool call (with the tolerant JSON chain
+     * inside) → ② plain-text sections with no tools at all. A truncated output
+     * halves the transcript and replays the whole ladder.
      */
     private callExtract;
+    private extractWithLadder;
+    private meta;
+    /** Strategy ①: memory_save tool call, tolerant JSON chain, text JSON as the ignored-tool fallback. */
+    private extractWithTool;
+    /** Strategy ②: no tools at all; ===SECTION=== blocks first, JSON as a courtesy. */
+    private extractFromText;
+    /**
+     * Text JSON parse: balanced object first, then the repair chain. A truncated
+     * response must still be structurally complete (otherwise the halved replay
+     * is the better move).
+     */
+    private parseJsonText;
     private normalizeFields;
 }
 //# sourceMappingURL=phase1.d.ts.map

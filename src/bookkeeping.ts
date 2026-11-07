@@ -1,7 +1,7 @@
 /** Durable bookkeeping through the storage hub KV backend: claims, cooldowns, pending flags. */
 
 import type { Config } from './config.js'
-import type { MemoryState, SessionClaim } from './types.js'
+import { EXTRACTOR_VERSION, type MemoryState, type SessionClaim } from './types.js'
 import { messageOf } from './util.js'
 
 /** Structural slice of the storage hub KV unit the plugin needs. */
@@ -35,6 +35,7 @@ function freshState(): MemoryState {
     lastPhase2At: 0,
     pendingConsolidation: false,
     overrides: {},
+    extractorVersion: EXTRACTOR_VERSION,
     usage: {},
     retiredAt: {},
     nextAutoRetryAt: 0,
@@ -88,12 +89,37 @@ export class MemoryStateStore {
           usage: record.usage ?? {},
           retiredAt: record.retiredAt ?? {},
           nextAutoRetryAt: record.nextAutoRetryAt ?? 0,
+          // `freshState()` would otherwise hide the legacy absence behind the
+          // current version; an archive without the field is version 0.
+          extractorVersion: record.extractorVersion ?? 0,
         }
+        // Release historical failures left by a less tolerant parser first:
+        // restart-orphan recovery below then handles this run's own leases.
+        this.upgradeExtractorVersion()
         this.recoverOrphans()
       }
     } catch (error: unknown) {
       this.storageError = messageOf(error)
     }
+  }
+
+  /**
+   * Re-queue every claim that failed under an older extractor version so the
+   * improved parser gets another chance, then stamp the current version.
+   * Returns the number of released claims (0 when already up to date).
+   */
+  upgradeExtractorVersion(version = EXTRACTOR_VERSION): number {
+    const stored = this.state.extractorVersion ?? 0
+    if (stored >= version) return 0
+    const released = this.resetFailedClaims()
+    this.state.extractorVersion = version
+    if (this.unit !== undefined) this.queueSave()
+    return released
+  }
+
+  /** Extractor version the current claims were produced with. */
+  get extractorVersion(): number {
+    return this.state.extractorVersion ?? 0
   }
 
   /** Recover claims interrupted by a restart, mirroring Codex lease expiry. */

@@ -110,19 +110,235 @@ export async function collectText(runtime: LlmRuntime, options: GenerateOptions,
   return text
 }
 
-/** Parse the raw JSON arguments of one collected tool call. */
-export function parseCallArguments(call: CollectedCall | undefined): Record<string, unknown> {
-  if (call === undefined || call.arguments.trim() === '') throw new LlmCallError('invalid-json', 'tool call has empty arguments')
-  let parsed: unknown
+/** Field names the Phase 1 extractor fills; also the anchors of the salvage parser. */
+export const EXTRACTION_KEYS = ['raw_memory', 'rollout_summary', 'rollout_slug'] as const
+
+/** Which stage of the tolerant parse chain accepted a payload. */
+export type ParseStrategy = 'strict' | 'repair' | 'salvage'
+
+export interface ParsedObject {
+  value: Record<string, unknown>
+  strategy: ParseStrategy
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * Repair a structurally broken JSON object emitted by a model: escape raw
+ * control characters and stray quotes inside strings, drop trailing commas,
+ * drop a dangling `"key":` tail, and close unterminated structures.
+ * Throws `invalid-json` when the text cannot be made parseable.
+ */
+export function repairJson(text: string): string {
+  const source = stripFences(text).trim()
+  const start = source.indexOf('{')
+  if (start < 0) throw new LlmCallError('invalid-json', 'model output contains no JSON object')
+  const out: string[] = []
+  const closers: string[] = []
+  let inString = false
+  for (let index = start; index < source.length; index += 1) {
+    const char = source[index]!
+    if (inString) {
+      if (char === '\\') {
+        const next = source[index + 1]
+        if (next === undefined) break
+        out.push(char, next)
+        index += 1
+        continue
+      }
+      if (char === '"') {
+        // A closing quote must be followed by a structural character; anything
+        // else is a literal quote the model forgot to escape.
+        const rest = source.slice(index + 1)
+        const structural = /^\s*[,:}\]]/.test(rest) || /^\s*$/.test(rest)
+        if (structural) {
+          inString = false
+          out.push('"')
+        } else {
+          out.push('\\"')
+        }
+        continue
+      }
+      if (char === '\n') {
+        out.push('\\n')
+        continue
+      }
+      if (char === '\r') {
+        out.push('\\r')
+        continue
+      }
+      if (char === '\t') {
+        out.push('\\t')
+        continue
+      }
+      const code = char.codePointAt(0) ?? 0
+      if (code < 0x20) {
+        out.push(`\\u${code.toString(16).padStart(4, '0')}`)
+        continue
+      }
+      out.push(char)
+      continue
+    }
+    if (char === '"') {
+      inString = true
+      out.push('"')
+      continue
+    }
+    if (char === ',') {
+      if (/^\s*[}\]]/.test(source.slice(index + 1))) continue
+      out.push(',')
+      continue
+    }
+    if (char === '{') {
+      closers.push('}')
+      out.push('{')
+      continue
+    }
+    if (char === '[') {
+      closers.push(']')
+      out.push('[')
+      continue
+    }
+    if (char === '}' || char === ']') {
+      const expected = closers.pop()
+      if (expected === undefined) continue
+      out.push(expected)
+      if (closers.length === 0) break
+      continue
+    }
+    out.push(char)
+  }
+  if (inString) out.push('"')
+  let body = out.join('').trimEnd().replace(/[\s,]+$/, '')
+  // A dangling key with no value (`{"a":1,"b":`) makes the appended closers invalid.
+  body = body.replace(/"(?:[^"\\]|\\.)*"\s*:\s*$/, '').replace(/[\s,]+$/, '')
+  const repaired = `${body}${closers.reverse().join('')}`
   try {
-    parsed = JSON.parse(call.arguments)
+    const parsed: unknown = JSON.parse(repaired)
+    if (!isPlainObject(parsed)) throw new LlmCallError('invalid-json', 'JSON root is not an object')
+  } catch (error: unknown) {
+    if (error instanceof LlmCallError) throw error
+    throw new LlmCallError('invalid-json', `model output could not be repaired: ${String(error).slice(0, 120)}`)
+  }
+  return repaired
+}
+
+/** Undo JSON string escapes (`\n`, `\"`, `\uXXXX`, …) for a salvaged fragment. */
+export function unescapeJsonString(value: string): string {
+  let out = ''
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index]!
+    if (char !== '\\') {
+      out += char
+      continue
+    }
+    const next = value[index + 1]
+    if (next === undefined) {
+      out += char
+      continue
+    }
+    index += 1
+    if (next === 'u') {
+      const hex = value.slice(index + 1, index + 5)
+      if (/^[0-9a-fA-F]{4}$/.test(hex)) {
+        out += String.fromCharCode(Number.parseInt(hex, 16))
+        index += 4
+      } else {
+        out += next
+      }
+      continue
+    }
+    switch (next) {
+      case 'n': out += '\n'; break
+      case 'r': out += '\r'; break
+      case 't': out += '\t'; break
+      case 'b': out += '\b'; break
+      case 'f': out += '\f'; break
+      case '"': out += '"'; break
+      case '\\': out += '\\'; break
+      case '/': out += '/'; break
+      default: out += next
+    }
+  }
+  return out
+}
+
+function trimSalvageTail(chunk: string): string {
+  return chunk
+    .replace(/[\s,]+$/, '')
+    .replace(/[}\]]+$/, '')
+    .replace(/[",\s]+$/, '')
+}
+
+/**
+ * Last-resort recovery: slice the payload at known key anchors and unescape
+ * each fragment, so one broken region does not lose the other fields.
+ * Throws `invalid-json` when no anchor is present.
+ */
+export function salvageFields(text: string, keys: readonly string[] = EXTRACTION_KEYS): Record<string, unknown> {
+  const source = stripFences(text)
+  const anchors: Array<{ key: string; start: number; valueStart: number }> = []
+  for (const key of keys) {
+    const pattern = new RegExp(`"${escapeRegExp(key)}"\\s*:\\s*"?`, 'g')
+    let match: RegExpExecArray | null
+    while ((match = pattern.exec(source)) !== null) {
+      anchors.push({ key, start: match.index, valueStart: match.index + match[0].length })
+    }
+  }
+  if (anchors.length === 0) throw new LlmCallError('invalid-json', 'model output contains no salvageable fields')
+  anchors.sort((left, right) => left.start - right.start)
+  const salvaged: Record<string, unknown> = {}
+  for (const [index, anchor] of anchors.entries()) {
+    if (salvaged[anchor.key] !== undefined) continue
+    const next = anchors.slice(index + 1).find(candidate => candidate.start >= anchor.valueStart)
+    const end = next === undefined ? source.length : next.start
+    salvaged[anchor.key] = unescapeJsonString(trimSalvageTail(source.slice(anchor.valueStart, end)))
+  }
+  return salvaged
+}
+
+/**
+ * Tolerant object parse: strict `JSON.parse` → `repairJson` → `salvageFields`.
+ * Only throws `invalid-json` when every stage fails.
+ */
+export function parseObjectLoose(text: string, label = 'model output', keys: readonly string[] = EXTRACTION_KEYS): ParsedObject {
+  const trimmed = text.trim()
+  if (trimmed !== '') {
+    try {
+      const parsed: unknown = JSON.parse(trimmed)
+      if (isPlainObject(parsed)) return { value: parsed, strategy: 'strict' }
+    } catch {
+      // Fall through to the repair stage.
+    }
+    try {
+      const repaired: unknown = JSON.parse(repairJson(trimmed))
+      if (isPlainObject(repaired)) return { value: repaired, strategy: 'repair' }
+    } catch {
+      // Fall through to the salvage stage.
+    }
+  }
+  try {
+    return { value: salvageFields(trimmed === '' ? text : trimmed, keys), strategy: 'salvage' }
   } catch {
-    throw new LlmCallError('invalid-json', `tool call "${call.name}" arguments are not valid JSON`)
+    throw new LlmCallError('invalid-json', `${label} are not valid JSON`)
   }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    throw new LlmCallError('invalid-json', `tool call "${call.name}" arguments are not a JSON object`)
-  }
-  return parsed as Record<string, unknown>
+}
+
+/** Parse the raw JSON arguments of one collected tool call (tolerant chain). */
+export function parseCallArguments(call: CollectedCall | undefined): Record<string, unknown> {
+  return parseCallArgumentsDetailed(call).value
+}
+
+/** Like `parseCallArguments` but also reports which stage accepted the payload. */
+export function parseCallArgumentsDetailed(call: CollectedCall | undefined): ParsedObject {
+  if (call === undefined || call.arguments.trim() === '') throw new LlmCallError('invalid-json', 'tool call has empty arguments')
+  return parseObjectLoose(call.arguments, `tool call "${call.name}" arguments`)
 }
 
 /** Strip a ```json fence when present. */
@@ -185,6 +401,76 @@ export function pickBlock(blocks: ReadonlyMap<string, string>, labels: readonly 
     if (body !== undefined) return body
   }
   return undefined
+}
+
+/** Sections of the pure-text Phase 1 contract. */
+export interface ParsedSections {
+  rolloutSlug: string
+  rolloutSummary: string
+  rawMemory: string
+  /** Number of distinct sections found (0 = the text is not section-shaped). */
+  matched: number
+}
+
+const SECTION_KEYS: Readonly<Record<string, 'rolloutSlug' | 'rolloutSummary' | 'rawMemory'>> = {
+  rollout_slug: 'rolloutSlug',
+  'rollout-slug': 'rolloutSlug',
+  rolloutslug: 'rolloutSlug',
+  slug: 'rolloutSlug',
+  rollout_summary: 'rolloutSummary',
+  'rollout-summary': 'rolloutSummary',
+  rolloutsummary: 'rolloutSummary',
+  raw_memory: 'rawMemory',
+  'raw-memory': 'rawMemory',
+  rawmemory: 'rawMemory',
+}
+
+/**
+ * Lenient reader for the plain-text Phase 1 output: accepts
+ * `===ROLLOUT_SLUG===` style section markers (with an optional inline value on
+ * the marker line) and ```` ```rollout_summary ```` labeled fences.
+ */
+export function parseSections(text: string): ParsedSections {
+  const source = text.replace(/\r\n/g, '\n')
+  const result: ParsedSections = { rolloutSlug: '', rolloutSummary: '', rawMemory: '', matched: 0 }
+  const found: Array<{ key: 'rolloutSlug' | 'rolloutSummary' | 'rawMemory'; inline: string; markerStart: number; bodyStart: number }> = []
+  const pattern = /^[ \t]*={2,}[ \t]*([A-Za-z0-9_-]+)[ \t]*={2,}[ \t]*(.*)$/gm
+  let match: RegExpExecArray | null
+  while ((match = pattern.exec(source)) !== null) {
+    const key = SECTION_KEYS[(match[1] ?? '').trim().toLowerCase()]
+    if (key === undefined) continue
+    found.push({
+      key,
+      inline: (match[2] ?? '').trim(),
+      markerStart: match.index,
+      bodyStart: match.index + match[0].length,
+    })
+  }
+  const seen = new Set<string>()
+  for (const [index, section] of found.entries()) {
+    if (seen.has(section.key)) continue
+    seen.add(section.key)
+    const next = found[index + 1]
+    const rawBody = source.slice(section.bodyStart, next === undefined ? source.length : next.markerStart).trim()
+    // The whole answer may be wrapped in one markdown fence: drop that fence.
+    const trimmedBody = rawBody.replace(/\n?```\s*$/, '').trim()
+    const body = trimmedBody.startsWith('```') ? stripFences(trimmedBody) : trimmedBody
+    result[section.key] = (section.inline === '' ? body : `${section.inline}\n${body}`).trim()
+  }
+  // Fenced-label compatibility: ```rollout_summary … ```
+  const blocks = parseFencedBlocks(source)
+  const fill = (key: 'rolloutSlug' | 'rolloutSummary' | 'rawMemory', labels: readonly string[]): void => {
+    if (seen.has(key)) return
+    const body = pickBlock(blocks, labels)
+    if (body === undefined) return
+    seen.add(key)
+    result[key] = body
+  }
+  fill('rolloutSummary', ['rollout_summary', 'rollout-summary', 'rolloutsummary'])
+  fill('rawMemory', ['raw_memory', 'raw-memory', 'rawmemory'])
+  fill('rolloutSlug', ['rollout_slug', 'rollout-slug', 'rolloutslug'])
+  result.matched = seen.size
+  return result
 }
 
 /** Resolve the pipeline's model route: explicit config first, then the deployment default. */
